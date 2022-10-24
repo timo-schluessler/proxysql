@@ -508,7 +508,9 @@ bool GTID_Server_Data::read_next_gtid() {
 					sscanf(subtoken,"%lu-%lu",&trx_from,&trx_to);
 					//fprintf(stdout,"BS from %s:%lu-%lu\n", uuid_server, trx_from, trx_to);
 					std::string s = uuid_server;
+					pthread_rwlock_rdlock(&MyHGM->gtid_rwlock);
 					gtid_executed[s].emplace_back(trx_from, trx_to);
+					pthread_rwlock_unlock(&MyHGM->gtid_rwlock);
 			   }
 			}
 		}
@@ -545,7 +547,9 @@ bool GTID_Server_Data::read_next_gtid() {
 			//fprintf(stdout,"%s:%lu\n", uuid_server, rec_trxid);
 			std::string s = uuid_server;
 			gtid_t new_gtid = std::make_pair(s,rec_trxid);
+			pthread_rwlock_rdlock(&MyHGM->gtid_rwlock);
 			addGtid(new_gtid,gtid_executed);
+			pthread_rwlock_unlock(&MyHGM->gtid_rwlock);
 			events_read++;
 			//return true;
 		}
