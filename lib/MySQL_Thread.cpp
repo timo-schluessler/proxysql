@@ -3638,7 +3638,7 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 // this function was inline in  MySQL_Thread::process_all_sessions()
 void MySQL_Thread::ProcessAllSessions_SortingSessions() {
 	unsigned int a=0;
-	for (unsigned int n=0; n<mysql_sessions->len; n++) {
+	for (unsigned int n=1; n<mysql_sessions->len; n++) {
 		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
 		if (sess->mybe && sess->mybe->server_myds) {
 			if (sess->mybe->server_myds->max_connect_time) {
@@ -5289,20 +5289,13 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 						c->number_of_matching_session_variables(client_conn, not_match);
 						if (not_match == 0) { // all session variables match
 							if (gtid_uuid) { // gtid_uuid is used
-								// we first check if we already excluded this parent (MySQL Server)
-								MySrvC *mysrvc = c->parent;
-								std::vector<MySrvC *>::iterator it;
-								it = find(parents.begin(), parents.end(), mysrvc);
-								if (it != parents.end()) {
-									// we didn't exclude this server (yet?)
-									bool gtid_found = false;
-									gtid_found = MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid);
-									if (gtid_found) { // this server has the correct GTID
-										c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
-										return c;
-									} else {
-										parents.push_back(mysrvc); // stop evaluating this server
-									}
+								bool gtid_found = false;
+								gtid_found = MyHGM->gtid_exists(c->parent, gtid_uuid, gtid_trxid);
+								if (gtid_found) { // this server has the correct GTID
+									c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
+									return c;
+								} else {
+									parents.push_back(c->parent); // stop evaluating this server
 								}
 							} else { // gtid_is not used
 								if (max_lag_ms >= 0) {
