@@ -529,6 +529,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"default_schema",
 	(char *)"poll_timeout",
 	(char *)"poll_timeout_on_failure",
+	(char *)"min_weight_timeout",
 	(char *)"server_capabilities",
 	(char *)"server_version",
 	(char *)"keep_multiplexing_variables",
@@ -1155,6 +1156,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.server_capabilities = CLIENT_MYSQL | CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB | CLIENT_PLUGIN_AUTH;;
 	variables.poll_timeout=2000;
 	variables.poll_timeout_on_failure=100;
+	variables.min_weight_timeout=100;
 	variables.have_compress=true;
 	variables.have_ssl = false; // disable by default for performance reason
 	variables.commands_stats=true;
@@ -2207,6 +2209,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["free_connections_pct"]        = make_tuple(&variables.free_connections_pct,        0,             100, false);
 		VariablesPointers_int["poll_timeout"]                = make_tuple(&variables.poll_timeout,               10,           20000, false);
 		VariablesPointers_int["poll_timeout_on_failure"]     = make_tuple(&variables.poll_timeout_on_failure,    10,           20000, false);
+		VariablesPointers_int["min_weight_timeout"]          = make_tuple(&variables.min_weight_timeout,         10,           20000, false);
 		VariablesPointers_int["reset_connection_algorithm"]  = make_tuple(&variables.reset_connection_algorithm,  1,               2, false);
 		VariablesPointers_int["shun_on_failures"]            = make_tuple(&variables.shun_on_failures,            0,        10000000, false);
 		VariablesPointers_int["shun_recovery_time_sec"]      = make_tuple(&variables.shun_recovery_time_sec,      0,     3600*24*365, false);
@@ -3850,35 +3853,18 @@ void MySQL_Thread::process_all_sessions() {
 			unregister_session(n);
 			n--;
 			delete sess;
-		} else {
-			if (sess->to_process==1) {
-				if (sess->pause_until <= curtime) {
-					rc=sess->handler();
-					//total_active_transactions_+=sess->active_transactions;
-					if (rc==-1 || sess->killed==true) {
-						char _buf[1024];
-						if (sess->client_myds && sess->killed)
-							proxy_warning("Closing killed client connection %s:%d\n",sess->client_myds->addr.addr,sess->client_myds->addr.port);
-						sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
-						GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf);
-						unregister_session(n);
-						n--;
-						delete sess;
-					}
-				}
-			} else {
-				if (sess->killed==true) {
-					// this is a special cause, if killed the session needs to be executed no matter if paused
-					sess->handler();
-					char _buf[1024];
-					if (sess->client_myds)
-						proxy_warning("Closing killed client connection %s:%d\n",sess->client_myds->addr.addr,sess->client_myds->addr.port);
-					sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
-					GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf);
-					unregister_session(n);
-					n--;
-					delete sess;
-				}
+		} else if ((sess->to_process==1 && sess->pause_until <= curtime) || sess->killed==true) { // if killed the session needs to be executed no matter if paused
+			rc=sess->handler();
+			//total_active_transactions_+=sess->active_transactions;
+			if (rc==-1 || sess->killed==true) {
+				char _buf[1024];
+				if (sess->client_myds && sess->killed)
+					proxy_warning("Closing killed client connection %s:%d\n",sess->client_myds->addr.addr,sess->client_myds->addr.port);
+				sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
+				GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf);
+				unregister_session(n);
+				n--;
+				delete sess;
 			}
 		}
 	}
@@ -4044,6 +4030,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___handle_unknown_charset=GloMTH->get_variable_int((char *)"handle_unknown_charset");
 	mysql_thread___poll_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
 	mysql_thread___poll_timeout_on_failure=GloMTH->get_variable_int((char *)"poll_timeout_on_failure");
+	mysql_thread___min_weight_timeout=GloMTH->get_variable_int((char *)"min_weight_timeout");
 	mysql_thread___have_compress=(bool)GloMTH->get_variable_int((char *)"have_compress");
 	mysql_thread___have_ssl=(bool)GloMTH->get_variable_int((char *)"have_ssl");
 	mysql_thread___multiplexing=(bool)GloMTH->get_variable_int((char *)"multiplexing");
@@ -5265,7 +5252,7 @@ void MySQL_Thread::Get_Memory_Stats() {
 }
 
 
-MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Session *sess, char *gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
+MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Session *sess, char *gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, unsigned int min_weight) {
 	// some sanity check
 	if (sess == NULL) return NULL;
 	if (sess->client_myds == NULL) return NULL;
@@ -5276,7 +5263,7 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 	MySQL_Connection *c=NULL;
 	for (i=0; i<cached_connections->len; i++) {
 		c=(MySQL_Connection *)cached_connections->index(i);
-		if (c->parent->myhgc->hid==_hid && sess->client_myds->myconn->match_tracked_options(c)) { // options are all identical
+		if (c->parent->myhgc->hid==_hid && sess->client_myds->myconn->match_tracked_options(c) && c->parent->weight >= min_weight) { // options are all identical/acceptable
 			if (
 				(gtid_uuid == NULL) || // gtid_uuid is not used
 				(gtid_uuid && find(parents.begin(), parents.end(), c->parent) == parents.end()) // the server is currently not excluded

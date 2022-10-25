@@ -2910,11 +2910,8 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 		}		
 	}
 
-	// NOTE-connect_retries_delay: This check alone is not enough for imposing
-	// 'mysql_thread___connect_retries_delay'. In case of 'async_connect' failing, 'pause_until' should also
-	// be set to 'mysql_thread___connect_retries_delay'. Complementary NOTE below.
 	if (mybe->server_myds->myconn==NULL) {
-		pause_until=thread->curtime+mysql_thread___connect_retries_delay*1000;
+		// pause_until is set by handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection above
 		*_rc=1;
 		return false;
 	} else {
@@ -2982,9 +2979,6 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 						PROXY_TRACE();
 					}			
 					myds->destroy_MySQL_Connection_From_Pool(false);
-					// NOTE-connect_retries_delay: In case of failure to connect, if
-					// 'mysql_thread___connect_retries_delay' is set, we impose a delay in the session
-					// processing via 'pause_until'. Complementary NOTE above.
 					if (mysql_thread___connect_retries_delay) {
 						pause_until=thread->curtime+mysql_thread___connect_retries_delay*1000;
 						set_status(CONNECTING_SERVER);
@@ -6801,6 +6795,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		char uuid[64];
 		char * gtid_uuid=NULL;
 		uint64_t trxid = 0;
+		unsigned int min_weight = qpo->min_weight;
 		unsigned long long now_us = 0;
 		if (qpo->max_lag_ms >= 0) {
 			if (qpo->max_lag_ms > 360000) { // this is an absolute time, we convert it to relative
@@ -6814,6 +6809,8 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				}
 			}
 		}
+		if (min_weight && CurrentQuery.waiting_since && (int)(thread->curtime - CurrentQuery.waiting_since) > mysql_thread___min_weight_timeout * 1000)
+			min_weight = 0;
 		if (session_fast_forward == false && qpo->create_new_conn == false) {
 			if (qpo->min_gtid) {
 				gtid_uuid = qpo->min_gtid;
@@ -6848,12 +6845,13 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 					}
 				}
 				uuid[n]='\0';
+
 #ifndef STRESSTEST_POOL
-				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, uuid, trxid, -1);
+				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, uuid, trxid, -1, min_weight);
 #endif // STRESSTEST_POOL
 			} else {
 #ifndef STRESSTEST_POOL
-				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, NULL, 0, (int)qpo->max_lag_ms);
+				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, NULL, 0, (int)qpo->max_lag_ms, min_weight);
 #endif // STRESSTEST_POOL
 			}
 		}
@@ -6874,9 +6872,9 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 
 		if (mc==NULL) {
 			if (trxid) {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), uuid, trxid, -1);
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), uuid, trxid, -1, min_weight);
 			} else {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), NULL, 0, (int)qpo->max_lag_ms);
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), NULL, 0, (int)qpo->max_lag_ms, min_weight);
 			}
 #ifdef STRESSTEST_POOL
 			if (mc && (loops < NUM_SLOW_LOOPS - 1)) {
@@ -6931,15 +6929,12 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- server_myds=%p -- MySQL_Connection %p\n", this, mybe->server_myds,  mybe->server_myds->myconn);
 	if (mybe->server_myds->myconn==NULL) {
 		// we couldn't get a connection for whatever reason, ex: no backends, or too busy
-		if (thread->mypolls.poll_timeout==0) { // tune poll timeout
+		pause_until=thread->curtime+mysql_thread___poll_timeout_on_failure*1000; // retry later
+		// TODO touching poll_timeout seems to be wrong here. instead we set pause_until here (and don't let our caller do it)
+		/*if (thread->mypolls.poll_timeout==0 || thread->mypolls.poll_timeout > (unsigned int)mysql_thread___poll_timeout_on_failure * 1000) { // tune poll timeout
 				thread->mypolls.poll_timeout = mysql_thread___poll_timeout_on_failure * 1000;
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , DS=%p , poll_timeout=%llu\n", mybe->server_myds, thread->mypolls.poll_timeout);
-		} else {
-			if (thread->mypolls.poll_timeout > (unsigned int)mysql_thread___poll_timeout_on_failure * 1000) {
-				thread->mypolls.poll_timeout = mysql_thread___poll_timeout_on_failure * 1000;
-				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , DS=%p , poll_timeout=%llu\n", mybe->server_myds, thread->mypolls.poll_timeout);
-			}
-		}
+		}*/
 		return;
 	}
 	if (mybe->server_myds->myconn->fd==-1) {

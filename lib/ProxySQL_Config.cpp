@@ -510,10 +510,11 @@ int ProxySQL_Config::Write_MySQL_Query_Rules_to_configfile(std::string& data) {
 				addField(data, "sticky_conn", r->fields[28], "");
 				addField(data, "multiplex", r->fields[29], "");
 				addField(data, "gtid_from_hostgroup", r->fields[30], "");
-				addField(data, "log", r->fields[31], "");
-				addField(data, "apply", r->fields[32], "");
-				addField(data, "attributes", r->fields[33]);
-				addField(data, "comment", r->fields[34]);
+				addField(data, "min_weight", r->fields[31], "");
+				addField(data, "log", r->fields[32], "");
+				addField(data, "apply", r->fields[33], "");
+				addField(data, "attributes", r->fields[34]);
+				addField(data, "comment", r->fields[35]);
 
 				data += "\t}";
 				isNext = true;
@@ -537,7 +538,7 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 	int i;
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	char *q=(char *)"INSERT OR REPLACE INTO mysql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment) VALUES (%d, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s, %s)";
+	char *q=(char *)"INSERT OR REPLACE INTO mysql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, min_weight, log, apply, attributes, comment) VALUES (%d, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s, %d, %s, %s)";
 	for (i=0; i< count; i++) {
 		const Setting &rule = mysql_query_rules[i];
 		int rule_id;
@@ -595,6 +596,7 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 		int sticky_conn=-1;
 		int multiplex=-1;
 		int gtid_from_hostgroup = -1;
+		unsigned int min_weight = 0;
 
 		// variable for parsing log
 		int log=-1;
@@ -651,6 +653,7 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 		rule.lookupValue("sticky_conn", sticky_conn);
 		rule.lookupValue("multiplex", multiplex);
 		rule.lookupValue("gtid_from_hostgroup", gtid_from_hostgroup);
+		rule.lookupValue("min_weight", min_weight);
 
 		rule.lookupValue("log", log);
 
@@ -694,6 +697,7 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 			strlen(std::to_string(sticky_conn).c_str()) + 4 +
 			strlen(std::to_string(multiplex).c_str()) + 4 +
 			strlen(std::to_string(gtid_from_hostgroup).c_str()) + 4 +
+			strlen(std::to_string(min_weight).c_str()) +
 			strlen(std::to_string(log).c_str()) + 4 +
 			strlen(std::to_string(apply).c_str()) + 4 +
 			( attributes_exists ? strlen(attributes.c_str()) : 0 ) + 4 +
@@ -787,6 +791,7 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 			( sticky_conn >= 0 ? std::to_string(sticky_conn).c_str() : "NULL") ,
 			( multiplex >= 0 ? std::to_string(multiplex).c_str() : "NULL") ,
 			( gtid_from_hostgroup >= 0 ? std::to_string(gtid_from_hostgroup).c_str() : "NULL") ,
+			min_weight,
 			( log >= 0 ? std::to_string(log).c_str() : "NULL") ,
 			( apply == 0 ? 0 : 1) ,
 			attributes.c_str(),

@@ -620,7 +620,7 @@ unsigned long long Query_Processor::get_new_req_conns_count() {
 	return __sync_fetch_and_add(&new_req_conns_count, 0);
 }
 
-QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, char *re_modifiers, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int cache_empty_result, int cache_timeout , int reconnect, int timeout, int retries, int delay, int next_query_flagIN, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, char *OK_msg, int sticky_conn, int multiplex, int gtid_from_hostgroup, int log, bool apply, char *attributes, char *comment) {
+QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, char *re_modifiers, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int cache_empty_result, int cache_timeout , int reconnect, int timeout, int retries, int delay, int next_query_flagIN, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, char *OK_msg, int sticky_conn, int multiplex, int gtid_from_hostgroup, unsigned int min_weight, int log, bool apply, char *attributes, char *comment) {
 	QP_rule_t * newQR=(QP_rule_t *)malloc(sizeof(QP_rule_t));
 	newQR->rule_id=rule_id;
 	newQR->active=active;
@@ -1412,7 +1412,7 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 					qr1->reconnect, qr1->timeout, qr1->retries, qr1->delay,
 					qr1->next_query_flagIN, qr1->mirror_flagOUT, qr1->mirror_hostgroup,
 					qr1->error_msg, qr1->OK_msg, qr1->sticky_conn, qr1->multiplex,
-					qr1->gtid_from_hostgroup,
+					qr1->gtid_from_hostgroup, qr1->min_weight,
 					qr1->log, qr1->apply,
 					qr1->attributes,
 					qr1->comment);
