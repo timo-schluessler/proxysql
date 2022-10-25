@@ -449,6 +449,10 @@ enum PROXYSQL_MYSQL_ERR {
 	ER_PROXYSQL_SRV_NULL_REPLICATION_LAG              = 9019,
 };
 
+enum mysql_thread_notification {
+	MYSQL_THREAD_NOTIFY_GTID_REACHED = 0xff,
+};
+
 #endif /* PROXYSQL_ENUMS */
 
 
@@ -511,6 +515,7 @@ class Query_Processor_Output;
 class MySrvC;
 class Web_Interface_plugin;
 class ProxySQL_Node_Address;
+class GTID_Await;
 #endif /* PROXYSQL_CLASSES */
 //#endif /* __cplusplus */
 

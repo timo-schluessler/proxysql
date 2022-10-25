@@ -418,6 +418,13 @@ bool GTID_Server_Data::gtid_exists(char *gtid_uuid, uint64_t gtid_trxid) {
 	return false;
 }
 
+uint64_t GTID_Server_Data::latest_trxid(char * gtid_uuid) {
+	auto it = gtid_executed.find(std::string(gtid_uuid));
+	if (it == gtid_executed.end() || it->second.empty())
+		return 0;
+	return it->second.back().second;
+}
+
 void GTID_Server_Data::read_all_gtids() {
 		while (read_next_gtid()) {
 		}
@@ -510,6 +517,7 @@ bool GTID_Server_Data::read_next_gtid() {
 					std::string s = uuid_server;
 					pthread_rwlock_rdlock(&MyHGM->gtid_rwlock);
 					gtid_executed[s].emplace_back(trx_from, trx_to);
+					MyHGM->wakeup_gtid_awaiters(weight, uuid_server, trx_to);
 					pthread_rwlock_unlock(&MyHGM->gtid_rwlock);
 			   }
 			}
@@ -549,6 +557,7 @@ bool GTID_Server_Data::read_next_gtid() {
 			gtid_t new_gtid = std::make_pair(s,rec_trxid);
 			pthread_rwlock_rdlock(&MyHGM->gtid_rwlock);
 			addGtid(new_gtid,gtid_executed);
+			MyHGM->wakeup_gtid_awaiters(weight, uuid_server, rec_trxid);
 			pthread_rwlock_unlock(&MyHGM->gtid_rwlock);
 			events_read++;
 			//return true;
@@ -2154,6 +2163,61 @@ bool MySQL_HostGroups_Manager::gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uin
 	return ret;
 }
 
+GTID_Await * MySQL_HostGroups_Manager::create_gtid_await(unsigned int hid, unsigned int min_weight, char * gtid_uuid, uint64_t trxid, int pipefd) {
+	pthread_rwlock_wrlock(&gtid_rwlock);
+	auto itr = gtid_awaits.find(CharPtrOrString(gtid_uuid));
+	if (itr == gtid_awaits.end())
+		//itr = gtid_awaits.emplace(CharPtrOrString(std::string(gtid_uuid)), std::vector<GTID_Awaits_Per_Weight {}).first;
+		itr = gtid_awaits.emplace(std::piecewise_construct, std::forward_as_tuple(CharPtrOrString(std::string(gtid_uuid))), std::forward_as_tuple()).first;
+	
+	auto awaits = std::find_if(itr->second.begin(), itr->second.end(), [=] (const GTID_Awaits_Per_Weight & a) { return a.min_weight == min_weight; });
+	if (awaits == itr->second.end()) {
+		// determine latest trxid received for gtid_uuid in this hostgroup
+		MyHGC *myhgc = MyHGC_lookup(hid);
+		uint64_t latest_trxid = myhgc->latest_trxid(min_weight, gtid_uuid);
+		itr->second.emplace_back(GTID_Awaits_Per_Weight { queue: {}, min_weight: min_weight, latest_trxid: latest_trxid });
+		awaits = itr->second.end() - 1;
+	}
+
+	GTID_Await * result = nullptr;
+	if (awaits->latest_trxid < trxid) {
+		result = new GTID_Await { .trxid = trxid, .pipefd = pipefd, .state { GTID_Await::Waiting } };
+		awaits->queue.push(result);
+	}
+
+	pthread_rwlock_unlock(&gtid_rwlock);
+
+	return result;
+}
+
+void MySQL_HostGroups_Manager::wakeup_gtid_awaiters(unsigned int weight, char * uuid, uint64_t trxid) {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Waking GTID awaiters because a server with weight %d received gtid %s::%lld\n", weight, uuid, trxid);
+	auto itr = gtid_awaits.find(CharPtrOrString(uuid));
+	if (itr == gtid_awaits.end())
+		return;
+	for (auto & awaits_per_weight: itr->second) {
+		if (weight < awaits_per_weight.min_weight)
+			continue;
+		if (trxid <= awaits_per_weight.latest_trxid)
+			continue;
+		awaits_per_weight.latest_trxid = trxid; // keep latest_trxid up to date
+		while (!awaits_per_weight.queue.empty() && awaits_per_weight.queue.top()->trxid <= trxid) {
+			auto await = awaits_per_weight.queue.top();
+			awaits_per_weight.queue.pop();
+
+			auto previous_state = await->state.exchange(GTID_Await::Reached, std::memory_order_relaxed);
+			if (previous_state == GTID_Await::Waiting) {
+				unsigned char c = MYSQL_THREAD_NOTIFY_GTID_REACHED;
+				if (write(await->pipefd, &c, 1) != 1) {
+					// this can happen if the thread finished between the atomic exchange and the write()
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Can't notify thread about new GTID arrival\n");
+				}
+			} else if (previous_state == GTID_Await::Aborted)
+				delete await;
+		}
+	}
+}
+
 void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
 	pthread_rwlock_wrlock(&gtid_rwlock);
 	// first, set them all as active = false
@@ -2205,6 +2269,10 @@ void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
 						ev_io_start(MyHGM->gtid_ev_loop,c);
 						//pthread_mutex_unlock(&ev_loop_mutex);
 					}
+				}
+
+				if (gtid_is) {
+					gtid_is->weight = mysrvc->weight;
 				}
 			}
 		}
@@ -3158,6 +3226,21 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 #endif // TEST_AURORA
 	return NULL; // if we reach here, we couldn't find any target
 }
+
+/// returns latest transaction id received by a server with a weight higher or equal min_weight for the given gtid_uuid
+uint64_t MyHGC::latest_trxid(unsigned int min_weight, char * gtid_uuid) {
+	uint64_t latest_trxid = 0;
+	for (unsigned int i = 0; i < mysrvs->cnt(); i++) {
+		MySrvC * mysrvc = mysrvs->idx(i);
+		if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE && mysrvc->weight >= min_weight) { // consider this server only if ONLINE and weight is above given threshold
+			auto itr = MyHGM->gtid_map.find(std::string(mysrvc->address) + ':' + std::to_string(mysrvc->port));
+			if (itr != MyHGM->gtid_map.end() && itr->second)
+				latest_trxid = std::max(latest_trxid, itr->second->latest_trxid(gtid_uuid));
+		}
+	}
+	return latest_trxid;
+}
+
 
 //unsigned int MySrvList::cnt() {
 //	return servers->len;

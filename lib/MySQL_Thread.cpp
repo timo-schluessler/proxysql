@@ -5576,7 +5576,14 @@ void MySQL_Thread::read_one_byte_from_pipe(unsigned int n) {
 		}
 		proxy_debug(PROXY_DEBUG_GENERIC,3, "Got signal from admin , done nothing\n");
 		//fprintf(stderr,"Got signal from admin , done nothing\n"); // FIXME: this is just the skeleton for issue #253
-		if (c) {
+		if (c == MYSQL_THREAD_NOTIFY_GTID_REACHED) {
+			for (unsigned int n=0; n<mysql_sessions->len; n++) {
+				MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
+				if (sess) {
+					sess->handle_gtid_await();
+				}
+			}
+		} else if (c) {
 			// we are being signaled to sleep for some ms. Before going to sleep we also release the mutex
 			pthread_mutex_unlock(&thread_mutex);
 			usleep(c*1000);

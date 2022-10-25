@@ -565,6 +565,7 @@ MySQL_Session::MySQL_Session() {
 	//gtid_trxid = 0;
 	gtid_hid = -1;
 	memset(gtid_buf,0,sizeof(gtid_buf));
+	gtid_await = nullptr;
 
 	match_regexes=NULL;
 
@@ -610,6 +611,7 @@ void MySQL_Session::reset() {
 	mybe=NULL;
 
 	with_gtid = false;
+	abort_gtid_await();
 
 	//gtid_trxid = 0;
 	gtid_hid = -1;
@@ -2866,6 +2868,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 				}
 			}
 			mybe->server_myds->max_connect_time=0;
+			abort_gtid_await();
 			NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
 		}
 	}
@@ -2897,6 +2900,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 		}
 
 		mybe->server_myds->wait_until=0;
+		abort_gtid_await();
 		NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
 	}
 
@@ -2915,6 +2919,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 		*_rc=1;
 		return false;
 	} else {
+		abort_gtid_await();
 		MySQL_Data_Stream *myds=mybe->server_myds;
 		MySQL_Connection *myconn=myds->myconn;
 		int rc;
@@ -4560,6 +4565,24 @@ void MySQL_Session::handler_rc0_Process_GTID(MySQL_Connection *myconn) {
 			memcpy(gtid_buf,mybe->gtid_uuid,sizeof(gtid_buf));
 		}
 	}
+}
+
+void MySQL_Session::handle_gtid_await() {
+	if (gtid_await && gtid_await->state.load(std::memory_order_relaxed) == GTID_Await::Reached) {
+		delete gtid_await;
+		gtid_await = nullptr;
+		pause_until = thread->curtime;
+		to_process = 1;
+	}
+}
+
+void MySQL_Session::abort_gtid_await() {
+	if (!gtid_await)
+		return;
+	auto previous_state = gtid_await->state.exchange(GTID_Await::Aborted, std::memory_order_relaxed);
+	if (previous_state == GTID_Await::Reached)
+		delete gtid_await;
+	gtid_await = nullptr;
 }
 
 int MySQL_Session::handler() {
@@ -6902,6 +6925,32 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 			mybe->server_myds->attach_connection(mc);
 			thread->status_variables.stvar[st_var_ConnPool_get_conn_success]++;
 		} else {
+			if (trxid) {
+				if (!gtid_await) {
+					gtid_await = MyHGM->create_gtid_await(mybe->hostgroup_id, min_weight, uuid, trxid, thread->pipefd[1]);
+					if (!gtid_await) {
+						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "trxid just arrived\n");
+						// TODO we should retry immediately - the gtid just arrived
+						// TODO but if we don't add + 1000 mypoll->poll_timeout will be set to 0 and then ttw will be set to mysql_thread___poll_timeout 
+						// TODO should we use a goto? or call us recursively?
+						pause_until = thread->curtime + 1000;
+						return;
+					}
+				}
+				// still poll with poll_timeout_on_failure in case we didn't get a MyConn for another reason (no free connection, ...)
+				unsigned long long poll_at = thread->curtime + mysql_thread___poll_timeout_on_failure * 1000;
+				if (mybe->server_myds->max_connect_time)
+					pause_until = std::min(poll_at, mybe->server_myds->max_connect_time);
+				else
+					pause_until = poll_at;
+
+				if (!CurrentQuery.waiting_since) {
+					CurrentQuery.waiting_since = thread->curtime;
+					//thread->status_variables.stvar[st_var_ConnPool_get_conn_gtid_missing]++;
+				}
+				return;
+			}
+
 			thread->status_variables.stvar[st_var_ConnPool_get_conn_failure]++;
 		}
 		if (qpo->max_lag_ms >= 0) {

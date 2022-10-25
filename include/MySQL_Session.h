@@ -159,6 +159,7 @@ class MySQL_Session
 	void init();
 	void reset();
 	void add_ldap_comment_to_pkt(PtrSize_t *);
+	void abort_gtid_await();
 	/**
 	 * @brief Performs the required housekeeping operations over the session and its connections before
 	 *  performing any processing on received client packets.
@@ -294,6 +295,7 @@ class MySQL_Session
 	char gtid_buf[128];
 	//uint64_t gtid_trxid;
 	int gtid_hid;
+	GTID_Await * gtid_await;
 
 	MySQL_STMTs_meta *sess_STMTs_meta;
 	StmtLongDataHandler *SLDH;
@@ -354,6 +356,7 @@ class MySQL_Session
 	void detected_broken_connection(const char *file, unsigned int line, const char *func, const char *action, MySQL_Connection *myconn, int myerr, const char *message, bool verbose=false);
 	void generate_status_one_hostgroup(int hid, std::string& s);
 	friend void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt);
+	void handle_gtid_await();
 };
 
 #define KILL_QUERY       1
