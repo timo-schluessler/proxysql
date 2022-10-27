@@ -59,7 +59,7 @@ class QP_rule_text {
 	char **pta;
 	int num_fields;
 	QP_rule_text(QP_rule_t *QPr) {
-		num_fields=36; // this count the number of fields
+		num_fields=37; // this count the number of fields
 		pta=NULL;
 		pta=(char **)malloc(sizeof(char *)*num_fields);
 		itostr(pta[0], (long long)QPr->rule_id);
@@ -111,11 +111,12 @@ class QP_rule_text {
 		itostr(pta[28], (long long)QPr->sticky_conn);
 		itostr(pta[29], (long long)QPr->multiplex);
 		itostr(pta[30], (long long)QPr->gtid_from_hostgroup);
-		itostr(pta[31], (long long)QPr->log);
-		itostr(pta[32], (long long)QPr->apply);
-		pta[33]=strdup_null(QPr->attributes);
-		pta[34]=strdup_null(QPr->comment); // issue #643
-		itostr(pta[35], (long long)QPr->hits);
+		itostr(pta[31], (long long)QPr->min_weight);
+		itostr(pta[32], (long long)QPr->log);
+		itostr(pta[33], (long long)QPr->apply);
+		pta[34]=strdup_null(QPr->attributes);
+		pta[35]=strdup_null(QPr->comment); // issue #643
+		itostr(pta[36], (long long)QPr->hits);
 	}
 	~QP_rule_text() {
 		for(int i=0; i<num_fields; i++) {
@@ -620,7 +621,7 @@ unsigned long long Query_Processor::get_new_req_conns_count() {
 	return __sync_fetch_and_add(&new_req_conns_count, 0);
 }
 
-QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, char *re_modifiers, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int cache_empty_result, int cache_timeout , int reconnect, int timeout, int retries, int delay, int next_query_flagIN, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, char *OK_msg, int sticky_conn, int multiplex, int gtid_from_hostgroup, unsigned int min_weight, int log, bool apply, char *attributes, char *comment) {
+QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, char *re_modifiers, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int cache_empty_result, int cache_timeout , int reconnect, int timeout, int retries, int delay, int next_query_flagIN, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, char *OK_msg, int sticky_conn, int multiplex, int gtid_from_hostgroup, int min_weight, int log, bool apply, char *attributes, char *comment) {
 	QP_rule_t * newQR=(QP_rule_t *)malloc(sizeof(QP_rule_t));
 	newQR->rule_id=rule_id;
 	newQR->active=active;
@@ -663,6 +664,7 @@ QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *user
 	newQR->sticky_conn=sticky_conn;
 	newQR->multiplex=multiplex;
 	newQR->gtid_from_hostgroup = gtid_from_hostgroup;
+	newQR->min_weight = min_weight;
 	newQR->apply=apply;
 	newQR->attributes=(attributes ? strdup(attributes) : NULL);
 	newQR->comment=(comment ? strdup(comment) : NULL); // see issue #643
@@ -799,7 +801,7 @@ SQLite3_result * Query_Processor::get_stats_query_rules() {
 
 SQLite3_result * Query_Processor::get_current_query_rules() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query rules, using Global version %d\n", version);
-	SQLite3_result *result=new SQLite3_result(35);
+	SQLite3_result *result=new SQLite3_result(36);
 	pthread_rwlock_rdlock(&rwlock);
 	QP_rule_t *qr1;
 	result->add_column_definition(SQLITE_TEXT,"rule_id");
@@ -833,6 +835,7 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 	result->add_column_definition(SQLITE_TEXT,"sticky_conn");
 	result->add_column_definition(SQLITE_TEXT,"multiplex");
 	result->add_column_definition(SQLITE_TEXT,"gtid_from_hostgroup");
+	result->add_column_definition(SQLITE_TEXT,"min_weight");
 	result->add_column_definition(SQLITE_TEXT,"log");
 	result->add_column_definition(SQLITE_TEXT,"apply");
 	result->add_column_definition(SQLITE_TEXT,"attributes");
@@ -1668,6 +1671,11 @@ __internal_loop:
 			// Note: negative gtid_from_hostgroup means this rule doesn't change the gtid_from_hostgroup
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set gtid from hostgroup: %d. A new session will be created\n", qr->rule_id, qr->gtid_from_hostgroup);
 			ret->gtid_from_hostgroup = qr->gtid_from_hostgroup;
+		}
+		if (qr->min_weight >= 0) {
+			// Note: negative min_weight means this rule doesn't change the min_weight
+			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set min weight: %d. A backend with at least weight %d will be used\n", qr->rule_id, qr->min_weight);
+			ret->min_weight = qr->min_weight;
 		}
 		if (qr->log >= 0) {
 			// Note: negative log means this rule doesn't change
