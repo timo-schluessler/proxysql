@@ -367,10 +367,11 @@ class MySQL_HostGroups_Manager {
 #else
 	rwlock_t rwlock;
 #endif
-	PtrArray *MyHostGroups;
-	std::unordered_map<unsigned int, MyHGC *>MyHostGroups_map;
+	struct MyHGC_to_hid {
+		static unsigned int getId(MyHGC * myhgc) { return myhgc->hid; }
+	};
+	PtrMap<unsigned int, MyHGC*, MyHGC_to_hid> MyHostGroups;
 
-	MyHGC * MyHGC_find(unsigned int);
 	MyHGC * MyHGC_create(unsigned int);
 
 	void add(MySrvC *, unsigned int);

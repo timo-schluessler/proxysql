@@ -1409,7 +1409,6 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	mydb->execute(MYHGM_MYSQL_GALERA_HOSTGROUPS);
 	mydb->execute(MYHGM_MYSQL_AWS_AURORA_HOSTGROUPS);
 	mydb->execute("CREATE INDEX IF NOT EXISTS idx_mysql_servers_hostname_port ON mysql_servers (hostname,port)");
-	MyHostGroups=new PtrArray();
 	runtime_mysql_servers=NULL;
 	incoming_replication_hostgroups=NULL;
 	incoming_group_replication_hostgroups=NULL;
@@ -1464,11 +1463,9 @@ void MySQL_HostGroups_Manager::shutdown() {
 }
 
 MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
-	while (MyHostGroups->len) {
-		MyHGC *myhgc=(MyHGC *)MyHostGroups->remove_index_fast(0);
+	for (auto & myhgc : MyHostGroups)
 		delete myhgc;
-	}
-	delete MyHostGroups;
+	MyHostGroups.clear();
 	delete mydb;
 	if (admindb) {
 		delete admindb;
@@ -1895,8 +1892,7 @@ bool MySQL_HostGroups_Manager::commit(
 		bool init = false;
 /* removing all this code, because we need them ordered
 		MySrvC *mysrvc=NULL;
-		for (unsigned int i=0; i<MyHostGroups->len; i++) {
-			MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		for (auto myhgc : MyHostGroups) {
 			for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
 				if (init == false) {
 					init = true;
@@ -2219,8 +2215,7 @@ void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
 	// NOTE: We are required to lock while iterating over 'MyHostGroups'. Otherwise race conditions could take place,
 	// e.g. servers could be purged by 'purge_mysql_servers_table' and invalid memory be accessed.
 	wrlock();
-	for (unsigned int i=0; i<MyHostGroups->len; i++) {
-		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+	for (auto myhgc : MyHostGroups) {
 		MySrvC *mysrvc=NULL;
 		for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
 			mysrvc=myhgc->mysrvs->idx(j);
@@ -2285,8 +2280,7 @@ void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
 }
 
 void MySQL_HostGroups_Manager::purge_mysql_servers_table() {
-	for (unsigned int i=0; i<MyHostGroups->len; i++) {
-		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+	for (auto myhgc : MyHostGroups) {
 		MySrvC *mysrvc=NULL;
 		for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
 			mysrvc=myhgc->mysrvs->idx(j);
@@ -2328,8 +2322,7 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 			proxy_info("Dumping current MySQL Servers structures for hostgroup %d\n", hidonly);
 		}
 	}
-	for (unsigned int i=0; i<MyHostGroups->len; i++) {
-		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+	for (auto myhgc : MyHostGroups) {
 		if (_onlyhg) {
 			int hidonly=*_onlyhg;
 			if (myhgc->hid!=(unsigned int)hidonly) {
@@ -2779,39 +2772,16 @@ MyHGC * MySQL_HostGroups_Manager::MyHGC_create(unsigned int _hid) {
 	return myhgc;
 }
 
-MyHGC * MySQL_HostGroups_Manager::MyHGC_find(unsigned int _hid) {
-	if (MyHostGroups->len < 100) {
-		// for few HGs, we use the legacy search
-		for (unsigned int i=0; i<MyHostGroups->len; i++) {
-			MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
-			if (myhgc->hid==_hid) {
-				return myhgc;
-			}
-		}
-	} else {
-		// for a large number of HGs, we use the unordered_map
-		// this search is slower for a small number of HGs, therefore we use
-		// it only for large number of HGs
-		std::unordered_map<unsigned int, MyHGC *>::const_iterator it = MyHostGroups_map.find(_hid);
-		if (it != MyHostGroups_map.end()) {
-			MyHGC *myhgc = it->second;
-			return myhgc;
-		}
-	}
-	return NULL;
-}
-
 MyHGC * MySQL_HostGroups_Manager::MyHGC_lookup(unsigned int _hid) {
 	MyHGC *myhgc=NULL;
-	myhgc=MyHGC_find(_hid);
+	myhgc=MyHostGroups.find(_hid);
 	if (myhgc==NULL) {
 		myhgc=MyHGC_create(_hid);
 	} else {
 		return myhgc;
 	}
 	assert(myhgc);
-	MyHostGroups->add(myhgc);
-	MyHostGroups_map.emplace(_hid,myhgc);
+	MyHostGroups.add(myhgc);
 	return myhgc;
 }
 
@@ -3435,15 +3405,13 @@ void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
 		}
 		proxy_info("Calling unshun_server_all_hostgroups() for server %s:%d . Arguments: %llu , %d , %s\n" , address, port, t, max_wait_sec, buf);
 	}
-	int i, j;
-	for (i=0; i<(int)MyHostGroups->len; i++) {
-		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+	for (auto myhgc : MyHostGroups) {
 		if (skip_hid != NULL && myhgc->hid == *skip_hid) {
 			// if skip_hid is not NULL, we skip that specific hostgroup
 			continue;
 		}
 		bool found = false; // was this server already found in this hostgroup?
-		for (j=0; found==false && j<(int)myhgc->mysrvs->cnt(); j++) {
+		for (int j=0; found==false && j<(int)myhgc->mysrvs->cnt(); j++) {
 			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
 			if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
 				// we only care for SHUNNED nodes
@@ -3628,15 +3596,13 @@ void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, u
 	wrlock();
 	if (mysql_thread___monitor_replication_lag_group_by_host == false) {
 		// legacy check. 1 check per server per hostgroup
-		MyHGC *myhgc = MyHGC_find(_hid);
+		MyHGC *myhgc = MyHostGroups.find(_hid);
 		replication_lag_action_inner(myhgc,address,port,current_replication_lag);
 	} else {
 		// only 1 check per server, no matter the hostgroup
 		// all hostgroups must be searched
-		for (unsigned int i=0; i<MyHostGroups->len; i++) {
-			MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		for (auto myhgc : MyHostGroups)
 			replication_lag_action_inner(myhgc,address,port,current_replication_lag);
-		}
 	}
 	wrunlock();
 	GloAdmin->mysql_servers_wrunlock();
@@ -3729,7 +3695,7 @@ void MySQL_HostGroups_Manager::group_replication_lag_action(
 			enable
 		) {
 			if (read_only == false) {
-				myhgc = MyHGM->MyHGC_find(_hid);
+				myhgc = MyHostGroups.find(_hid);
 				group_replication_lag_action_set_server_status(myhgc, address, port, lag_counts, enable);
 			}
 		}
@@ -3739,7 +3705,7 @@ void MySQL_HostGroups_Manager::group_replication_lag_action(
 			mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only == 2 ||
 			enable
 		) {
-			myhgc = MyHGM->MyHGC_find(reader_hostgroup);
+			myhgc = MyHostGroups.find(reader_hostgroup);
 			group_replication_lag_action_set_server_status(myhgc, address, port, lag_counts, enable);
 		}
 	}
@@ -3752,10 +3718,8 @@ __exit_replication_lag_action:
 
 void MySQL_HostGroups_Manager::drop_all_idle_connections() {
 	// NOTE: the caller should hold wrlock
-	int i, j;
-	for (i=0; i<(int)MyHostGroups->len; i++) {
-		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
-		for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
+	for (auto myhgc : MyHostGroups) {
+		for (int j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
 			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
 			if (mysrvc->status!=MYSQL_SERVER_STATUS_ONLINE) {
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Server %s:%d is not online\n", mysrvc->address, mysrvc->port);
@@ -3819,17 +3783,17 @@ int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 	// Multimap holding the required info for accesing the oldest idle connections found.
 	std::multimap<uint64_t,std::pair<MySrvC*,int32_t>> oldest_idle_connections {};
 
-	for (int i=0; i<(int)MyHostGroups->len; i++) {
+	for (size_t i=0; i<MyHostGroups.len(); i++) {
 		if (_hid == -1) {
 			// all hostgroups must be examined
 			// as of version 2.3.2 , this is always the case
-			myhgc=(MyHGC *)MyHostGroups->index(i);
+			myhgc=(MyHGC *)MyHostGroups.index(i);
 		} else {
 			// only one hostgroup is examined
 			// as of version 2.3.2 , this never happen
 			// but the code support this functionality
-			myhgc = MyHGC_find(_hid);
-			i = (int)MyHostGroups->len; // to exit from this "for" loop
+			myhgc = MyHostGroups.find(_hid);
+			i = MyHostGroups.len(); // to exit from this "for" loop
 			if (myhgc == NULL)
 				continue; // immediately exit
 		}
@@ -3993,9 +3957,8 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 	result->add_column_definition(SQLITE_TEXT,"mysql_info");
 	unsigned long long curtime = monotonic_time();
 	wrlock();
-	int i,j, k, l;
-	for (i=0; i<(int)MyHostGroups->len; i++) {
-		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+	int j, k, l;
+	for (auto myhgc : MyHostGroups) {
 		for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
 			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
 			if (mysrvc->status!=MYSQL_SERVER_STATUS_ONLINE) {
@@ -4137,8 +4100,7 @@ void MySQL_HostGroups_Manager::p_update_connection_pool_update_gauge(
 void MySQL_HostGroups_Manager::p_update_connection_pool() {
 	std::vector<string> cur_servers_ids {};
 	wrlock();
-	for (int i = 0; i < static_cast<int>(MyHostGroups->len); i++) {
-		MyHGC *myhgc = static_cast<MyHGC*>(MyHostGroups->index(i));
+	for (auto myhgc : MyHostGroups) {
 		for (int j = 0; j < static_cast<int>(myhgc->mysrvs->cnt()); j++) {
 			MySrvC *mysrvc = static_cast<MySrvC*>(myhgc->mysrvs->servers->index(j));
 			std::string endpoint_addr = mysrvc->address;
@@ -4250,9 +4212,8 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
   result->add_column_definition(SQLITE_TEXT,"Bytes_recv");
   result->add_column_definition(SQLITE_TEXT,"Latency_us");
 	wrlock();
-	int i,j, k;
-	for (i=0; i<(int)MyHostGroups->len; i++) {
-		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+	int j, k;
+	for (auto myhgc : MyHostGroups) {
 		for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
 			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
 			if (hid == NULL) {
@@ -4709,8 +4670,7 @@ bool MySQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
 	bool ret = false;
 	wrlock();
 	MySrvC *mysrvc=NULL;
-	for (unsigned int i=0; i<MyHostGroups->len; i++) {
-	MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+	for (auto myhgc : MyHostGroups) {
 		unsigned int j;
 		unsigned int l=myhgc->mysrvs->cnt();
 		if (l) {
@@ -4764,8 +4724,7 @@ bool MySQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
 void MySQL_HostGroups_Manager::set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us) {
 	wrlock();
 	MySrvC *mysrvc=NULL;
-  for (unsigned int i=0; i<MyHostGroups->len; i++) {
-    MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+	for (auto myhgc : MyHostGroups) {
 		unsigned int j;
 		unsigned int l=myhgc->mysrvs->cnt();
 		if (l) {
@@ -4880,9 +4839,8 @@ unsigned long long MySQL_HostGroups_Manager::Get_Memory_Stats() {
 	unsigned long long intsize=0;
 	wrlock();
 	MySrvC *mysrvc=NULL;
-  for (unsigned int i=0; i<MyHostGroups->len; i++) {
+	for (auto myhgc : MyHostGroups) {
 		intsize+=sizeof(MyHGC);
-    MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
 		unsigned int j,k;
 		unsigned int l=myhgc->mysrvs->cnt();
 		if (l) {
@@ -6830,11 +6788,9 @@ bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int 
 	sprintf(address,"%s%s",_server_id,domain_name);
 	GloAdmin->mysql_servers_wrlock();
 	wrlock();
-	int i,j;
-	for (i=0; i<(int)MyHostGroups->len; i++) {
-		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+	for (auto myhgc : MyHostGroups) {
 		if (_whid!=(int)myhgc->hid && _rhid!=(int)myhgc->hid) continue;
-		for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
+		for (int j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
 			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
 			if (strcmp(mysrvc->address,address)==0 && mysrvc->port==port) {
 				// we found the server
@@ -7354,14 +7310,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 MySrvC* MySQL_HostGroups_Manager::find_server_in_hg(unsigned int _hid, const std::string& addr, int port) {
 	MySrvC* f_server = nullptr;
 
-	MyHGC* myhgc = nullptr;
-	for (uint32_t i = 0; i < MyHostGroups->len; i++) {
-		myhgc = static_cast<MyHGC*>(MyHostGroups->index(i));
-
-		if (myhgc->hid == _hid) {
-			break;
-		}
-	}
+	MyHGC * myhgc = MyHostGroups.find(_hid);
 
 	if (myhgc != nullptr) {
 		for (uint32_t j = 0; j < myhgc->mysrvs->cnt(); j++) {

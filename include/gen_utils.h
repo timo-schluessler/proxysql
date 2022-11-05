@@ -118,7 +118,7 @@ class PtrArray {
 			pdata[i]=pdata[len-1];
 		len--;
 		if ( ( len>MIN_ARRAY_LEN ) && ( size > len*MIN_ARRAY_DELETE_RATIO ) ) {
-			//shrink(); // FIXME: when shrink is called, is r invalid ??
+			//shrink(); // FIXME: when shrink is called, is r invalid ?? no it is not, but this doesn't mean we should call shrink() here
 		}
 		return r;
 	}
@@ -189,7 +189,102 @@ class PtrSizeArray {
 		return intsize;
 	}
 };
+
+template<class I, class T, class TtoI>
+class PtrMap : private std::vector<T> {
+public:
+	typedef std::vector<T> V;
+
+	PtrMap(unsigned int __size=0) : V(), unset{} {
+		V::reserve(__size);
+	}
+
+	size_t len() const {
+		return V::size();
+	}
+	const T & index(unsigned int i) const {
+		return V::at(i);
+	}
+	void add(T p) {
+		map.emplace(TtoI::getId(p), p);
+		V::push_back(p);
+	}
+	bool remove(const T & p) {
+		if (map.erase(TtoI::getId(p)) == 0)
+			return false;
+		auto t = V::erase(V::find(p));
+		check_size();
+		return t;
+	}
+	T remove_index(unsigned int i) {
+		if (map.erase(TtoI::getId(index(i))) == 0)
+			return nullptr;
+		auto t = V::erase(V::begin() + i);
+		check_size();
+		return t;
+	}
+	bool remove_fast(const T & p) {
+		if (map.erase(TtoI::getId(p)) == 0)
+			return false;
+		remove_index_fast(V::find(p) - V::begin());
+		return true;
+	}
+	T remove_index_fast(unsigned int i) {
+		if (map.erase(TtoI::getId(index(i))) == 0)
+			return nullptr;
+
+		T r(std::move(this[i]));
+		if (i != V::size() - 1)
+			this[i] = std::move(this[V::size() - 1]);
+		V::resize(V::size() - 1);
+		check_size();
+		return r;
+
+		return static_cast<T*>(PtrArray::remove_index_fast(i));
+	}
+	void check_size() {
+		if (V::size() > MIN_ARRAY_LEN && V::size() > V::size() * MIN_ARRAY_DELETE_RATIO) {
+			V::shrink_to_fit();
+		}
+	}
+	void clear() {
+		V::clear();
+		map.clear();
+	}
+
+	typename V::const_iterator begin() const {
+		return V::begin();
+	}
+	typename V::const_iterator end() const {
+		return V::end();
+	}
+
+	const T & find(I id) const {
+		if (len() < 100) {
+			// for few entries, we use the legacy search
+			for (unsigned int i=0; i<len(); i++) {
+				const T & entry = V::at(i);
+				if (TtoI::getId(entry) == id)
+					return entry;
+			}
+		} else {
+			// for a large number of entries, we use the unordered_map
+			// this search is slower for a small number of entries, therefore we use
+			// it only for large number of entries
+			auto it = map.find(id);
+			if (it != map.end())
+				return it->second;
+		}
+		return unset;
+	}
+
+private:
+	std::unordered_map<I, T> map;
+	T unset;
+};
+
 #endif /* __CLASS_PTR_ARRAY_H */
+
 
 
 
