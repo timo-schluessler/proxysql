@@ -5252,7 +5252,7 @@ void MySQL_Thread::Get_Memory_Stats() {
 }
 
 
-MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Session *sess, char *gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, unsigned int min_weight) {
+MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Session *sess, const GTID_UUID * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, unsigned int min_weight) {
 	// some sanity check
 	if (sess == NULL) return NULL;
 	if (sess->client_myds == NULL) return NULL;
@@ -5265,8 +5265,8 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 		c=(MySQL_Connection *)cached_connections->index(i);
 		if (c->parent->myhgc->hid==_hid && sess->client_myds->myconn->match_tracked_options(c) && c->parent->weight >= min_weight) { // options are all identical/acceptable
 			if (
-				(gtid_uuid == NULL) || // gtid_uuid is not used
-				(gtid_uuid && find(parents.begin(), parents.end(), c->parent) == parents.end()) // the server is currently not excluded
+				gtid_uuid == NULL || // gtid_uuid is not used
+				find(parents.begin(), parents.end(), c->parent) == parents.end() // the server is currently not excluded
 			) {
 				MySQL_Connection *client_conn = sess->client_myds->myconn;
 				if (c->requires_CHANGE_USER(client_conn)==false) { // CHANGE_USER is not required
@@ -5277,7 +5277,7 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 						if (not_match == 0) { // all session variables match
 							if (gtid_uuid) { // gtid_uuid is used
 								bool gtid_found = false;
-								gtid_found = MyHGM->gtid_exists(c->parent, gtid_uuid, gtid_trxid);
+								gtid_found = MyHGM->gtid_exists(c->parent, *gtid_uuid, gtid_trxid);
 								if (gtid_found) { // this server has the correct GTID
 									c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
 									return c;

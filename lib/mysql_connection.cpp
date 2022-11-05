@@ -4,7 +4,6 @@
 #include "SpookyV2.h"
 #include <fcntl.h>
 #include <sstream>
-#include <inttypes.h>
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
@@ -449,7 +448,6 @@ MySQL_Connection::MySQL_Connection() {
 	statuses.questions = 0;
 	statuses.myconnpoll_get = 0;
 	statuses.myconnpoll_put = 0;
-	memset(gtid_uuid,0,sizeof(gtid_uuid));
 };
 
 MySQL_Connection::~MySQL_Connection() {
@@ -2700,12 +2698,25 @@ void MySQL_Connection::reset() {
 	}
 }
 
-bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
+bool MySQL_Connection::get_gtid(GTID_UUID * buff, uint64_t * trx_id) {
 	// note: current implementation for for OWN GTID and MARIADB workaround only!
 	bool ret = false;
 	if (buff==NULL || trx_id == NULL) {
 		return ret;
 	}
+	auto parse_trxid = [] (const char * input, size_t length, uint64_t & trxid) {
+		char buf[22];
+		char * endptr;
+		if (length > sizeof(buf) - 1)
+			return false;
+		memcpy(buf, input, length); // unfortunately we can't modify input
+		buf[length] = '\0'; // and strtoull doesn't accept a maximum length - so we need a trailing \0
+		trxid = strtoull(buf, &endptr, 10);
+		if (endptr != buf + length)
+			return false;
+		return true;
+	};
+
 	if (mysql) {
 		if (mysql->net.last_errno==0) { // only if there is no error
 			if (mysql->server_status & SERVER_SESSION_STATE_CHANGED) { // only if status changed
@@ -2713,17 +2724,24 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 				size_t length;
 				if (!options.is_mariadb) {
 					if (mysql_session_track_get_first(mysql, SESSION_TRACK_GTIDS, &data, &length) == 0) {
-						if (length >= (sizeof(gtid_uuid) - 1)) {
-							length = sizeof(gtid_uuid) - 1;
-						}
-						if (memcmp(gtid_uuid,data,length)) {
-							// copy to local buffer in MySQL_Connection
-							memcpy(gtid_uuid,data,length);
-							gtid_uuid[length]=0;
-							// copy to external buffer in MySQL_Backend
-							memcpy(buff,data,length);
-							buff[length]=0;
+						GTID_UUID new_uuid;
+						if (!GTID_UUID::from_string(&new_uuid, data, length))
+							return ret; // gtid is invalid
+						if (data[new_uuid.len()] != ':')
+							return ret; // gtid is invalid
+
+						uint64_t new_trxid;
+						if (!parse_trxid(data + new_uuid.len() + 1, length - new_uuid.len() - 1, new_trxid))
+							return ret;
+
+						if (new_trxid != *trx_id) { // comparing trxid is sufficient because uuid can't change for same trxid
 							ret = true;
+							*trx_id = new_trxid;
+
+							// copy gtid_uuid to local buffer in MySQL_Connection
+							gtid_uuid = new_uuid;
+							// copy to external buffer in MySQL_Backend
+							*buff = new_uuid;
 						}
 					}
 				} else {
@@ -2747,17 +2765,16 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 									return ret;
 								p = endptr + 1;
 
-								char buf[22];
-								memcpy(buf, p, data + length - p); // unfortunately we can't modify data
-								buf[data + length - p] = '\0'; // and strtoull doesn't accept a maximum length - so we need a trailing \0
-								uint64_t id = strtoull(buf, &endptr, 10);
-								if (endptr == buf || endptr >= buf + sizeof(buf) || *endptr != '\0')
+								uint64_t new_trxid;
+								if (!parse_trxid(p, data + length - p, new_trxid))
 									return ret;
 
-								sprintf(gtid_uuid, "%08" PRIX32 "-0000-0000-0000-%08" PRIX32 ":%" PRIu64, domain, server_id, id);
-								strcpy(buff, gtid_uuid);
-
-								ret = true;
+								if (new_trxid != *trx_id) {
+									*trx_id = new_trxid;
+									GTID_UUID::from_mariadb(&gtid_uuid, domain, server_id);
+									*buff = gtid_uuid;
+									ret = true;
+								}
 								break;
 							}
 						}

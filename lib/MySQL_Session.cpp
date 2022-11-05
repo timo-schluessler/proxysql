@@ -20,6 +20,8 @@
 #include "SQLite3_Server.h"
 #include "MySQL_Variables.h"
 
+#include <cinttypes>
+
 
 #include "libinjection.h"
 #include "libinjection_sqli.h"
@@ -564,7 +566,7 @@ MySQL_Session::MySQL_Session() {
 
 	//gtid_trxid = 0;
 	gtid_hid = -1;
-	memset(gtid_buf,0,sizeof(gtid_buf));
+	gtid_trxid = 0;
 	gtid_await = nullptr;
 
 	match_regexes=NULL;
@@ -613,9 +615,8 @@ void MySQL_Session::reset() {
 	with_gtid = false;
 	abort_gtid_await();
 
-	//gtid_trxid = 0;
+	gtid_trxid = 0;
 	gtid_hid = -1;
-	memset(gtid_buf,0,sizeof(gtid_buf));
 	if (session_type == PROXYSQL_SESSION_SQLITE) {
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)thread->gen_args;
 		if (sqlite_sess && sqlite_sess->sessdb) {
@@ -1048,7 +1049,16 @@ __ret_autocommit_OK:
 }
 
 void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
-	char buff[32];
+	char buff[64];
+	auto print_uuid = [&buff] (const GTID_UUID & uuid, uint64_t trxid) {
+		if (trxid) {
+			auto off = uuid.write(buff);
+			sprintf(buff + off, ":%" PRIu64, trxid); // max length: 36 uuid, 1 colon, 21 uint64_t, '\0' = 58
+		} else
+			buff[0] = '\0';
+		return buff;
+	};
+
 	sprintf(buff,"%p",this);
 	j["address"] = buff;
 	if (thread) {
@@ -1067,7 +1077,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["last_insert_id"] = last_insert_id;
 	j["last_HG_affected_rows"] = last_HG_affected_rows;
 	j["gtid"]["hid"] = gtid_hid;
-	j["gtid"]["last"] = ( strlen(gtid_buf) ? gtid_buf : "" );
+	j["gtid"]["last"] = print_uuid(gtid_uuid, gtid_trxid);
 	j["qpo"]["create_new_connection"] = qpo->create_new_conn;
 	j["qpo"]["reconnect"] = qpo->reconnect;
 	j["qpo"]["sticky_conn"] = qpo->sticky_conn;
@@ -1140,7 +1150,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 		_mybe=(MySQL_Backend *)mybes->index(i);
 		//unsigned int i = _mybe->hostgroup_id;
 		j["backends"][i]["hostgroup_id"] = _mybe->hostgroup_id;
-		j["backends"][i]["gtid"] = ( strlen(_mybe->gtid_uuid) ? _mybe->gtid_uuid : "" );
+		j["backends"][i]["gtid"] = print_uuid(_mybe->gtid_uuid, _mybe->gtid_trxid);
 		if (_mybe->server_myds) {
 			MySQL_Data_Stream *_myds=_mybe->server_myds;
 			sprintf(buff,"%p",_myds);
@@ -6815,8 +6825,8 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 
 		MySQL_Connection *mc=NULL;
 		MySQL_Backend * _gtid_from_backend = NULL;
-		char uuid[64];
-		char * gtid_uuid=NULL;
+		GTID_UUID uuid_buf;
+		GTID_UUID * uuid=nullptr;
 		uint64_t trxid = 0;
 		unsigned int min_weight = qpo->min_weight;
 		unsigned long long now_us = 0;
@@ -6834,41 +6844,25 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		}
 		if (min_weight && CurrentQuery.waiting_since && (int)(thread->curtime - CurrentQuery.waiting_since) > mysql_thread___min_weight_timeout * 1000)
 			min_weight = 0;
+
 		if (session_fast_forward == false && qpo->create_new_conn == false) {
-			if (qpo->min_gtid) {
-				gtid_uuid = qpo->min_gtid;
-				with_gtid = true;
+			if (qpo->min_gtid && GTID_UUID::from_string(&uuid_buf, qpo->min_gtid)) {
+				uuid = &uuid_buf;
+				if (qpo->min_gtid[uuid_buf.len()] == ':')
+					trxid = strtoull(qpo->min_gtid + uuid_buf.len() + 1, NULL, 10);
+
 			} else if (qpo->gtid_from_hostgroup >= 0) {
 				_gtid_from_backend = find_backend(qpo->gtid_from_hostgroup);
 				if (_gtid_from_backend) {
-					if (_gtid_from_backend->gtid_uuid[0]) {
-						gtid_uuid = _gtid_from_backend->gtid_uuid;
-						with_gtid = true;
+					if (_gtid_from_backend->gtid_trxid) {
+						uuid = &_gtid_from_backend->gtid_uuid;
+						trxid = _gtid_from_backend->gtid_trxid;
 					}
 				}
 			}
 
-			char *sep_pos = NULL;
-			if (gtid_uuid != NULL) {
-				sep_pos = index(gtid_uuid,':');
-				if (sep_pos == NULL) {
-					gtid_uuid = NULL; // gtid is invalid
-				}
-			}
-
-			if (gtid_uuid != NULL) {
-				int l = sep_pos - gtid_uuid;
-				trxid = strtoull(sep_pos+1, NULL, 10);
-				int m;
-				int n=0;
-				for (m=0; m<l; m++) {
-					if (gtid_uuid[m] != '-') {
-						uuid[n]=gtid_uuid[m];
-						n++;
-					}
-				}
-				uuid[n]='\0';
-
+			if (trxid) {
+				with_gtid = true;
 #ifndef STRESSTEST_POOL
 				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, uuid, trxid, -1, min_weight);
 #endif // STRESSTEST_POOL
@@ -6927,7 +6921,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		} else {
 			if (trxid) {
 				if (!gtid_await) {
-					gtid_await = MyHGM->create_gtid_await(mybe->hostgroup_id, min_weight, uuid, trxid, thread->pipefd[1]);
+					gtid_await = MyHGM->create_gtid_await(mybe->hostgroup_id, min_weight, *uuid, trxid, thread->pipefd[1]);
 					if (!gtid_await) {
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "trxid just arrived\n");
 						// TODO we should retry immediately - the gtid just arrived

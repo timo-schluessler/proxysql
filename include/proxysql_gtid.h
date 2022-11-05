@@ -6,12 +6,108 @@
 #include <list>
 #include <utility>
 #include <queue>
+#include <cinttypes>
 
-#include "fnv-1a.h"
+class GTID_UUID {
+public:
+	GTID_UUID() : uuid{} {}
+	static bool from_string(GTID_UUID * uuid, const char * uuidOrGtid);
+	static bool from_string(GTID_UUID * uuid, const char * uuidOrGtid, size_t length);
+	static bool from_string_without_dashes(GTID_UUID * uuid, const char * in, size_t length);
+	static void from_mariadb(GTID_UUID * uuid, uint32_t domain, uint32_t server_id);
 
-typedef std::pair<std::string, int64_t> gtid_t;
+	size_t len() const { return 32 + 4; }
+	size_t write(void * buf) const; // write including dashes but without leading zero
+	char * print() const; // prints this uuid to a thread local buffer and returns that buffer
+
+	bool operator==(const GTID_UUID & uuid) const { return this->uuid == uuid.uuid; }
+
+	friend struct std::hash<GTID_UUID>;
+
+private:
+	std::array<char, 32> uuid; // without dashes
+};
+
+inline bool GTID_UUID::from_string(GTID_UUID * uuid, const char * uuidOrGtid) {
+	return from_string(uuid, uuidOrGtid, strlen(uuidOrGtid));
+}
+
+inline bool GTID_UUID::from_string(GTID_UUID * uuid, const char * uuidOrGtid, size_t length) {
+	// UUID format: 3E11FA47-71CA-11E1-9E33-C80AA9429562
+	// %08X-%04X-%04X-%04X-%012X
+	if (length < 36)
+		return false;
+	if (uuidOrGtid[36] != '\0' && uuidOrGtid[36] != ':')
+		return false;
+	if (uuidOrGtid[8] != '-' || uuidOrGtid[13] != '-' || uuidOrGtid[18] != '-' || uuidOrGtid[23] != '-')
+		return false;
+	memcpy(uuid->uuid.data()     , uuidOrGtid     ,  8);
+	memcpy(uuid->uuid.data() +  8, uuidOrGtid +  9,  4);
+	memcpy(uuid->uuid.data() + 12, uuidOrGtid + 14,  4);
+	memcpy(uuid->uuid.data() + 16, uuidOrGtid + 19,  4);
+	memcpy(uuid->uuid.data() + 20, uuidOrGtid + 24, 12);
+
+	return true;
+}
+
+inline bool GTID_UUID::from_string_without_dashes(GTID_UUID * uuid, const char * in, size_t length) {
+	if (length != 32)
+		return false;
+	memcpy(uuid->uuid.data(), in, 32);
+	return true;
+}
+
+inline void GTID_UUID::from_mariadb(GTID_UUID * uuid, uint32_t domain, uint32_t server_id) {
+	sprintf(uuid->uuid.data(), "%08" PRIX32 "0000000000000000%08" PRIX32, domain, server_id);
+}
+
+inline size_t GTID_UUID::write(void * buf_void) const {
+	char * buf = (char*)buf_void;
+	memcpy(buf     , uuid.data()     ,  8);
+	buf[8] = '-';
+	memcpy(buf +  9, uuid.data() +  8,  4);
+	buf[13] = '-';
+	memcpy(buf + 14, uuid.data() + 12,  4);
+	buf[18] = '-';
+	memcpy(buf + 19, uuid.data() + 16,  4);
+	buf[23] = '-';
+	memcpy(buf + 24, uuid.data() + 20, 12);
+	return 36;
+}
+
+inline char * GTID_UUID::print() const {
+	thread_local static char buf[32 + 4 + 1];
+	auto len = write(buf);
+	buf[len] = '\0';
+
+	return buf;
+}
+
+template<>
+struct std::hash<GTID_UUID>
+{
+	size_t operator()(GTID_UUID const& uuid) const noexcept {
+		// TODO benchmark whether it is better to use this "hashing" method
+		// TODO or to use fnv1a
+		uint64_t tmp[4];
+		memcpy(tmp, uuid.uuid.data(), 8);
+		memcpy(tmp + 1, uuid.uuid.data() + 8, 8);
+		memcpy(tmp + 2, uuid.uuid.data() + 16, 8);
+		memcpy(tmp + 3, uuid.uuid.data() + 24, 8);
+		uint64_t sum = tmp[0] + tmp[1] + tmp[2] + tmp[3];
+		if (sizeof(size_t) == sizeof(uint64_t))
+			return sum;
+		else {
+			uint32_t * u32 = (uint32_t*)&sum;
+			return (size_t)(u32[0] + u32[1]);
+		}
+	}
+};
+
+
+typedef std::pair<GTID_UUID, int64_t> gtid_t;
 typedef std::pair<int64_t, int64_t> gtid_interval_t;
-typedef std::unordered_map<std::string, std::list<gtid_interval_t>> gtid_set_t;
+typedef std::unordered_map<GTID_UUID, std::list<gtid_interval_t>> gtid_set_t;
 
 /*
 class Gtid_Server_Info {
@@ -58,29 +154,5 @@ struct GTID_Awaits_Per_Weight {
 };
 
 typedef std::vector<GTID_Awaits_Per_Weight> GTID_Awaits;
-
-struct CharPtrOrString {
-	const char* p_;
-	std::string s_;
-
-	explicit CharPtrOrString(const char* p) : p_{p} { }
-	CharPtrOrString(std::string s) : p_{nullptr}, s_{std::move(s)} { }
-
-	bool operator==(const CharPtrOrString& x) const {
-		return p_ ? x.p_ ? std::strcmp(p_, x.p_) == 0 : p_ == x.s_
-		          : x.p_ ? s_ == x.p_ : s_ == x.s_;
-	}
-
-	struct Hash {
-		size_t operator()(const CharPtrOrString& x) const {
-			auto hashfn = fnv1a_t<CHAR_BIT * sizeof(std::size_t)> {};
-			if (x.p_)
-				hashfn.update(x.p_, std::strlen(x.p_));
-			else
-				hashfn.update(x.s_.data(), x.s_.size());
-			return hashfn.digest();
-		}
-	};
-};
 
 #endif /* PROXYSQL_GTID */

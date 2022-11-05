@@ -2,6 +2,7 @@
 #define __CLASS_MYSQL_BACKEND_H
 #include "proxysql.h"
 #include "cpp.h"
+#include "proxysql_gtid.h"
 
 
 class MySQL_Backend
@@ -10,7 +11,7 @@ class MySQL_Backend
 	void * operator new(size_t);
 	void operator delete(void *);
 	int hostgroup_id;
-	char gtid_uuid[128];
+	GTID_UUID gtid_uuid;
 	uint64_t gtid_trxid;
 	MySQL_Data_Stream *server_myds;
 //  mysql_cp_entry_t *server_mycpe;

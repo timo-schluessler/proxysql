@@ -78,7 +78,7 @@ class GTID_Server_Data {
 	size_t pos;
 	struct ev_io *w;
 	unsigned int weight;
-	char uuid_server[64];
+	GTID_UUID uuid_server;
 	unsigned long long events_read;
 	gtid_set_t gtid_executed;
 	bool active;
@@ -88,8 +88,8 @@ class GTID_Server_Data {
 	bool readall();
 	bool writeout();
 	bool read_next_gtid();
-	bool gtid_exists(char *gtid_uuid, uint64_t gtid_trxid);
-	uint64_t latest_trxid(char * gtid_uuid);
+	bool gtid_exists(const GTID_UUID & gtid_uuid, uint64_t gtid_trxid);
+	uint64_t latest_trxid(const GTID_UUID & gtid_uuid);
 	void read_all_gtids();
 	void dump();
 };
@@ -201,8 +201,8 @@ class MyHGC {	// MySQL Host Group Container
 	MySrvList *mysrvs;
 	MyHGC(int);
 	~MyHGC();
-	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess, unsigned int min_weight);
-	uint64_t latest_trxid(unsigned int min_weight, char * gtid_uuid);
+	MySrvC *get_random_MySrvC(const GTID_UUID * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess, unsigned int min_weight);
+	uint64_t latest_trxid(unsigned int min_weight, const GTID_UUID & gtid_uuid);
 };
 
 class Group_Replication_Info {
@@ -474,7 +474,7 @@ class MySQL_HostGroups_Manager {
 
 	pthread_rwlock_t gtid_rwlock;
 	std::unordered_map <string, GTID_Server_Data *> gtid_map;
-	std::unordered_map <CharPtrOrString, GTID_Awaits, CharPtrOrString::Hash> gtid_awaits;
+	std::unordered_map <GTID_UUID, GTID_Awaits> gtid_awaits;
 	struct ev_async * gtid_ev_async;
 	struct ev_loop * gtid_ev_loop;
 	struct ev_timer * gtid_ev_timer;
@@ -621,7 +621,7 @@ class MySQL_HostGroups_Manager {
 	
 	void MyConn_add_to_pool(MySQL_Connection *);
 
-	MySQL_Connection * get_MyConn_from_pool(unsigned int hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, unsigned int min_weight);
+	MySQL_Connection * get_MyConn_from_pool(unsigned int hid, MySQL_Session *sess, bool ff, const GTID_UUID * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, unsigned int min_weight);
 
 	void drop_all_idle_connections();
 	int get_multiple_idle_connections(int, unsigned long long, MySQL_Connection **, int);
@@ -685,9 +685,9 @@ class MySQL_HostGroups_Manager {
 
 	SQLite3_result * get_stats_mysql_gtid_executed();
 	void generate_mysql_gtid_executed_tables();
-	bool gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid);
-	GTID_Await * create_gtid_await(unsigned int hid, unsigned int min_weight, char * gtid_uuid, uint64_t trxid, int pipefd);
-	void wakeup_gtid_awaiters(unsigned int weight, char * uuid, uint64_t trxid);
+	bool gtid_exists(MySrvC *mysrvc, const GTID_UUID & gtid_uuid, uint64_t gtid_trxid);
+	GTID_Await * create_gtid_await(unsigned int hid, unsigned int min_weight, const GTID_UUID & gtid_uuid, uint64_t trxid, int pipefd);
+	void wakeup_gtid_awaiters(unsigned int weight, const GTID_UUID & uuid, uint64_t trxid);
 
 	SQLite3_result *SQL3_Get_ConnPool_Stats();
 	void increase_reset_counter();

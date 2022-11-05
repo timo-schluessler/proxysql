@@ -3,6 +3,7 @@
 
 #include "proxysql.h"
 #include "cpp.h"
+#include "proxysql_gtid.h"
 
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
@@ -141,7 +142,7 @@ class MySQL_Connection {
 	bool multiplex_delayed;
 	bool unknown_transaction_status;
 	void compute_unknown_transaction_status();
-	char gtid_uuid[128];
+	GTID_UUID gtid_uuid;
 	MySQL_Connection();
 	~MySQL_Connection();
 	bool set_autocommit(bool);
@@ -227,7 +228,7 @@ class MySQL_Connection {
 
 	void reset();
 
-	bool get_gtid(char *buff, uint64_t *trx_id);
+	bool get_gtid(GTID_UUID *buff, uint64_t *trx_id);
 	void reduce_auto_increment_delay_token() { if (auto_increment_delay_token) auto_increment_delay_token--; };
 
 	bool match_tracked_options(const MySQL_Connection *c);

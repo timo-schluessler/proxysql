@@ -11,6 +11,7 @@
 #include "MySQL_Variables.h"
 
 #include <sstream>
+#include <cinttypes>
 
 //#include <ma_global.h>
 
@@ -463,9 +464,9 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 	uint8_t msg_len_len=mysql_encode_length(msg_len, &msg_prefix);
 
 	bool client_session_track=false;
-	//char gtid_buf[128];
+	char gtid_buf[22];
 	char gtid_prefix;
-	uint8_t gtid_len=0;
+	uint8_t gtid_uuid_len=0, gtid_trxid_len=0, gtid_len=0;
 	uint8_t gtid_len_len=0;
 
 	mysql_hdr myhdr;
@@ -482,7 +483,9 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 							myhdr.pkt_length++;
 						}
 						client_session_track=true;
-						gtid_len = strlen(sess->gtid_buf);
+						gtid_uuid_len = sess->gtid_uuid.len();
+						gtid_trxid_len = sprintf(gtid_buf, "%" PRIu64, sess->gtid_trxid);
+						gtid_len = gtid_uuid_len + 1 + gtid_trxid_len;
 						gtid_len_len = mysql_encode_length(gtid_len, &gtid_prefix);
 						myhdr.pkt_length += gtid_len_len;
 						myhdr.pkt_length += gtid_len;
@@ -544,7 +547,7 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 		if (msg_len == 0) {
 			_ptr[l]=0x00; l++;
 		}
-		if (gtid_len) {
+		if (gtid_uuid_len) {
 			unsigned char gtid_prefix_h1 = gtid_len+2;
 			unsigned char state_change_prefix = gtid_prefix_h1+2;
 			_ptr[l] = state_change_prefix; l++;
@@ -553,7 +556,9 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 			_ptr[l]=0x00; l++;
 			// l+=write_encoded_length(_ptr+l, gtid_len, gtid_len_len, gtid_prefix); // overcomplicated
 			_ptr[l] = gtid_len; l++;
-			memcpy(_ptr+l, sess->gtid_buf, gtid_len);
+			l += sess->gtid_uuid.write(_ptr+l);
+			_ptr[l] = ':'; l++;
+			memcpy(_ptr+l, gtid_buf, gtid_trxid_len); l += gtid_trxid_len;
 		}
 	}
 	if (send==true) {

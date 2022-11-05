@@ -354,7 +354,6 @@ GTID_Server_Data::GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _p
 	w = _w;
 	size = 1024; // 1KB buffer
 	data = (char *)malloc(size);
-	memset(uuid_server, 0, sizeof(uuid_server));
 	pos = 0;
 	len = 0;
 	address = strdup(_address);
@@ -400,10 +399,9 @@ bool GTID_Server_Data::readall() {
 }
 
 
-bool GTID_Server_Data::gtid_exists(char *gtid_uuid, uint64_t gtid_trxid) {
-	std::string s = gtid_uuid;
-	auto it = gtid_executed.find(s);
-//	fprintf(stderr,"Checking if server %s:%d has GTID %s:%lu ... ", address, port, gtid_uuid, gtid_trxid);
+bool GTID_Server_Data::gtid_exists(const GTID_UUID & gtid_uuid, uint64_t gtid_trxid) {
+	auto it = gtid_executed.find(gtid_uuid);
+//	fprintf(stderr,"Checking if server %s:%d has GTID %s:%lu ... ", address, port, gtid_uuid.print(), gtid_trxid);
 	if (it == gtid_executed.end()) {
 //		fprintf(stderr,"NO\n");
 		return false;
@@ -418,8 +416,8 @@ bool GTID_Server_Data::gtid_exists(char *gtid_uuid, uint64_t gtid_trxid) {
 	return false;
 }
 
-uint64_t GTID_Server_Data::latest_trxid(char * gtid_uuid) {
-	auto it = gtid_executed.find(std::string(gtid_uuid));
+uint64_t GTID_Server_Data::latest_trxid(const GTID_UUID & gtid_uuid) {
+	auto it = gtid_executed.find(gtid_uuid);
 	if (it == gtid_executed.end() || it->second.empty())
 		return 0;
 	return it->second.back().second;
@@ -501,22 +499,17 @@ bool GTID_Server_Data::read_next_gtid() {
 					}
 				j++;
 				if (j%2 == 1) { // we are reading the uuid
-					char *p = uuid_server;
-					for (unsigned int k=0; k<strlen(subtoken); k++) {
-						if (subtoken[k]!='-') {
-							*p = subtoken[k];
-							p++;
-						}
-					}
+					//fprintf(stdout, "gtid parse %s\n", subtoken);
+					if (!GTID_UUID::from_string(&uuid_server, subtoken))
+						break;
 					//fprintf(stdout,"BS from %s\n", uuid_server);
 				} else { // we are reading the trxids
 					uint64_t trx_from;
 					uint64_t trx_to;
 					sscanf(subtoken,"%lu-%lu",&trx_from,&trx_to);
-					//fprintf(stdout,"BS from %s:%lu-%lu\n", uuid_server, trx_from, trx_to);
-					std::string s = uuid_server;
+					//fprintf(stdout,"BS from %s:%lu-%lu\n", uuid_server.print(), trx_from, trx_to);
 					pthread_rwlock_rdlock(&MyHGM->gtid_rwlock);
-					gtid_executed[s].emplace_back(trx_from, trx_to);
+					gtid_executed[uuid_server].emplace_back(trx_from, trx_to);
 					MyHGM->wakeup_gtid_awaiters(weight, uuid_server, trx_to);
 					pthread_rwlock_unlock(&MyHGM->gtid_rwlock);
 			   }
@@ -538,11 +531,10 @@ bool GTID_Server_Data::read_next_gtid() {
 			int ul = 0;
 			switch (rec_msg[1]) {
 				case '1':
-					//sscanf(rec_msg+3,"%s\:%lu",uuid_server,&rec_trxid);
+					//sscanf(rec_msg+3,"%s\:%lu",uuid_server.print(),&rec_trxid);
 					a = strchr(rec_msg+3,':');
 					ul = a-rec_msg-3;
-					strncpy(uuid_server,rec_msg+3,ul);
-					uuid_server[ul] = 0;
+					GTID_UUID::from_string_without_dashes(&uuid_server, rec_msg + 3, ul);
 					rec_trxid=atoll(a+1);
 					break;
 				case '2':
@@ -552,9 +544,8 @@ bool GTID_Server_Data::read_next_gtid() {
 				default:
 					break;
 			}
-			//fprintf(stdout,"%s:%lu\n", uuid_server, rec_trxid);
-			std::string s = uuid_server;
-			gtid_t new_gtid = std::make_pair(s,rec_trxid);
+			//fprintf(stdout,"%s:%lu\n", uuid_server.print(), rec_trxid);
+			gtid_t new_gtid = std::make_pair(uuid_server, rec_trxid);
 			pthread_rwlock_rdlock(&MyHGM->gtid_rwlock);
 			addGtid(new_gtid,gtid_executed);
 			MyHGM->wakeup_gtid_awaiters(weight, uuid_server, rec_trxid);
@@ -570,11 +561,7 @@ bool GTID_Server_Data::read_next_gtid() {
 std::string gtid_executed_to_string(gtid_set_t& gtid_executed) {
 	std::string gtid_set;
 	for (auto it=gtid_executed.begin(); it!=gtid_executed.end(); ++it) {
-		std::string s = it->first;
-		s.insert(8,"-");
-		s.insert(13,"-");
-		s.insert(18,"-");
-		s.insert(23,"-");
+		std::string s = it->first.print();
 		s = s + ":";
 		for (auto itr = it->second.begin(); itr != it->second.end(); ++itr) {
 			std::string s2 = s;
@@ -2141,7 +2128,7 @@ bool MySQL_HostGroups_Manager::commit(
 	return true;
 }
 
-bool MySQL_HostGroups_Manager::gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid) {
+bool MySQL_HostGroups_Manager::gtid_exists(MySrvC *mysrvc, const GTID_UUID & gtid_uuid, uint64_t gtid_trxid) {
 	bool ret = false;
 	pthread_rwlock_rdlock(&gtid_rwlock);
 	std::string s1 = mysrvc->address;
@@ -2158,17 +2145,16 @@ bool MySQL_HostGroups_Manager::gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uin
 			}
 		}
 	}
-	//proxy_info("Checking if server %s has GTID %s:%lu . %s\n", s1.c_str(), gtid_uuid, gtid_trxid, (ret ? "YES" : "NO"));
+	//proxy_info("Checking if server %s has GTID %s:%lu . %s\n", s1.c_str(), gtid_uuid.print(), gtid_trxid, (ret ? "YES" : "NO"));
 	pthread_rwlock_unlock(&gtid_rwlock);
 	return ret;
 }
 
-GTID_Await * MySQL_HostGroups_Manager::create_gtid_await(unsigned int hid, unsigned int min_weight, char * gtid_uuid, uint64_t trxid, int pipefd) {
+GTID_Await * MySQL_HostGroups_Manager::create_gtid_await(unsigned int hid, unsigned int min_weight, const GTID_UUID & gtid_uuid, uint64_t trxid, int pipefd) {
 	pthread_rwlock_wrlock(&gtid_rwlock);
-	auto itr = gtid_awaits.find(CharPtrOrString(gtid_uuid));
+	auto itr = gtid_awaits.find(gtid_uuid);
 	if (itr == gtid_awaits.end())
-		//itr = gtid_awaits.emplace(CharPtrOrString(std::string(gtid_uuid)), std::vector<GTID_Awaits_Per_Weight {}).first;
-		itr = gtid_awaits.emplace(std::piecewise_construct, std::forward_as_tuple(CharPtrOrString(std::string(gtid_uuid))), std::forward_as_tuple()).first;
+		itr = gtid_awaits.emplace(std::piecewise_construct, std::forward_as_tuple(gtid_uuid), std::forward_as_tuple()).first;
 	
 	auto awaits = std::find_if(itr->second.begin(), itr->second.end(), [=] (const GTID_Awaits_Per_Weight & a) { return a.min_weight == min_weight; });
 	if (awaits == itr->second.end()) {
@@ -2190,9 +2176,9 @@ GTID_Await * MySQL_HostGroups_Manager::create_gtid_await(unsigned int hid, unsig
 	return result;
 }
 
-void MySQL_HostGroups_Manager::wakeup_gtid_awaiters(unsigned int weight, char * uuid, uint64_t trxid) {
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Waking GTID awaiters because a server with weight %d received gtid %s::%lld\n", weight, uuid, trxid);
-	auto itr = gtid_awaits.find(CharPtrOrString(uuid));
+void MySQL_HostGroups_Manager::wakeup_gtid_awaiters(unsigned int weight, const GTID_UUID & uuid, uint64_t trxid) {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Waking GTID awaiters because a server with weight %d received gtid %s::%lld\n", weight, uuid.print(), trxid);
+	auto itr = gtid_awaits.find(uuid);
 	if (itr == gtid_awaits.end())
 		return;
 	for (auto & awaits_per_weight: itr->second) {
@@ -2889,7 +2875,7 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool_array(MySQL_Connection **ca, 
 	wrunlock();
 }
 
-MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess, unsigned int min_weight) {
+MySrvC *MyHGC::get_random_MySrvC(const GTID_UUID * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess, unsigned int min_weight) {
 	MySrvC *mysrvc=NULL;
 	unsigned int j;
 	unsigned int sum=0;
@@ -2919,7 +2905,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 				if (mysrvc->ConnectionsUsed->conns_length() < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
 					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
 						if (gtid_trxid) {
-							if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
+							if (MyHGM->gtid_exists(mysrvc, *gtid_uuid, gtid_trxid)) {
 								sum+=mysrvc->weight;
 								TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 								mysrvcCandidates[num_candidates]=mysrvc;
@@ -2987,7 +2973,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 								// if a server is taken back online, consider it immediately
 								if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
 									if (gtid_trxid) {
-										if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
+										if (MyHGM->gtid_exists(mysrvc, *gtid_uuid, gtid_trxid)) {
 											sum+=mysrvc->weight;
 											TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 											mysrvcCandidates[num_candidates]=mysrvc;
@@ -3055,7 +3041,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 				last_hg_log = time(NULL);
 
 				if (gtid_trxid) {
-					proxy_error("Hostgroup %u has no servers ready for GTID '%s:%d'. Waiting for replication...\n", hid, gtid_uuid, gtid_trxid);
+					proxy_error("Hostgroup %u has no servers ready for GTID '%s:%d'. Waiting for replication...\n", hid, gtid_uuid->print(), gtid_trxid);
 				} else {
 					proxy_error("Hostgroup %u has no servers available%s! Checking servers shunned for more than %u second%s\n", hid,
 						(max_connections_reached ? " or max_connections reached for all servers" : ""), max_wait_sec, max_wait_sec == 1 ? "" : "s");
@@ -3072,7 +3058,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 						// if a server is taken back online, consider it immediately
 						if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
 							if (gtid_trxid) {
-								if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
+								if (MyHGM->gtid_exists(mysrvc, *gtid_uuid, gtid_trxid)) {
 									sum+=mysrvc->weight;
 									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 									mysrvcCandidates[num_candidates]=mysrvc;
@@ -3099,7 +3085,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			}
 		}
 		if (sum==0) {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with matching weight\n");
 			if (l>32) {
 				free(mysrvcCandidates);
 			}
@@ -3228,7 +3214,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 }
 
 /// returns latest transaction id received by a server with a weight higher or equal min_weight for the given gtid_uuid
-uint64_t MyHGC::latest_trxid(unsigned int min_weight, char * gtid_uuid) {
+uint64_t MyHGC::latest_trxid(unsigned int min_weight, const GTID_UUID & gtid_uuid) {
 	uint64_t latest_trxid = 0;
 	for (unsigned int i = 0; i < mysrvs->cnt(); i++) {
 		MySrvC * mysrvc = mysrvs->idx(i);
@@ -3490,7 +3476,7 @@ void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
 	}
 }
 
-MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, unsigned int min_weight) {
+MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, MySQL_Session *sess, bool ff, const GTID_UUID * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, unsigned int min_weight) {
 	MySQL_Connection * conn=NULL;
 	wrlock();
 	status.myconnpoll_get++;

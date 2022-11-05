@@ -292,8 +292,8 @@ class MySQL_Session
 
 	bool with_gtid;
 
-	char gtid_buf[128];
-	//uint64_t gtid_trxid;
+	GTID_UUID gtid_uuid;
+	uint64_t gtid_trxid;
 	int gtid_hid;
 	GTID_Await * gtid_await;
 
