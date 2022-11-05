@@ -4569,10 +4569,11 @@ void MySQL_Session::housekeeping_before_pkts() {
 
 // this function was inline
 void MySQL_Session::handler_rc0_Process_GTID(MySQL_Connection *myconn) {
-	if (myconn->get_gtid(mybe->gtid_uuid,&mybe->gtid_trxid)) {
+	if (myconn->get_gtid(&mybe->gtid_uuid, &mybe->gtid_trxid)) {
 		if (mysql_thread___client_session_track_gtid) {
 			gtid_hid = current_hostgroup;
-			memcpy(gtid_buf,mybe->gtid_uuid,sizeof(gtid_buf));
+			gtid_uuid = mybe->gtid_uuid;
+			gtid_trxid = mybe->gtid_trxid;
 		}
 	}
 }
