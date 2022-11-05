@@ -155,4 +155,32 @@ struct GTID_Awaits_Per_Weight {
 
 typedef std::vector<GTID_Awaits_Per_Weight> GTID_Awaits;
 
+class Shared_GTID {
+	public:
+		Shared_GTID(unsigned int hid, const GTID_UUID & uuid, uint64_t trxid) : _hid(hid), trxid(trxid) {
+			pthread_rwlock_init(&rwlock, nullptr);
+			this->uuid = uuid;
+		}
+		unsigned int hid() { return _hid; }
+		void update(const GTID_UUID & uuid, uint64_t trxid) {
+			pthread_rwlock_wrlock(&rwlock);
+			if (this->trxid < trxid) {
+				this->uuid = uuid;
+				this->trxid = trxid;
+			}
+			pthread_rwlock_unlock(&rwlock);
+		}
+		void get(GTID_UUID & uuid, uint64_t & trxid) {
+			pthread_rwlock_rdlock(&rwlock);
+			uuid = this->uuid;
+			trxid = this->trxid;
+			pthread_rwlock_unlock(&rwlock);
+		}
+	private:
+		pthread_rwlock_t rwlock; // TODO I think this would be a better fit for a read/write spinlock?
+		unsigned int _hid;
+		GTID_UUID uuid;
+		uint64_t trxid;
+};
+
 #endif /* PROXYSQL_GTID */

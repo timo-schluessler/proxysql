@@ -4575,6 +4575,7 @@ void MySQL_Session::handler_rc0_Process_GTID(MySQL_Connection *myconn) {
 			gtid_uuid = mybe->gtid_uuid;
 			gtid_trxid = mybe->gtid_trxid;
 		}
+		thread->update_our_latest_gtid((unsigned int)mybe->hostgroup_id, mybe->gtid_uuid, mybe->gtid_trxid);
 	}
 }
 
@@ -6847,10 +6848,18 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 			min_weight = 0;
 
 		if (session_fast_forward == false && qpo->create_new_conn == false) {
+			const int offset = 1000000;
 			if (qpo->min_gtid && GTID_UUID::from_string(&uuid_buf, qpo->min_gtid)) {
 				uuid = &uuid_buf;
 				if (qpo->min_gtid[uuid_buf.len()] == ':')
 					trxid = strtoull(qpo->min_gtid + uuid_buf.len() + 1, NULL, 10);
+
+			} else if (qpo->gtid_from_hostgroup >= offset) {
+				thread->our_latest_gtid((unsigned int)(qpo->gtid_from_hostgroup - offset), uuid_buf, trxid);
+				if (trxid) {
+					uuid = &uuid_buf;
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "our gtid: got uuid %s and trxid %lld from thread\n", uuid->print(), trxid);
+				}
 
 			} else if (qpo->gtid_from_hostgroup >= 0) {
 				_gtid_from_backend = find_backend(qpo->gtid_from_hostgroup);

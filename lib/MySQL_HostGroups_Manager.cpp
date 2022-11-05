@@ -7325,3 +7325,32 @@ MySrvC* MySQL_HostGroups_Manager::find_server_in_hg(unsigned int _hid, const std
 	return f_server;
 }
 
+std::shared_ptr<Shared_GTID> MySQL_HostGroups_Manager::our_latest_gtid(unsigned int hid) {
+	wrlock();
+	auto myhgc = MyHostGroups.find(hid);
+	if (!myhgc)
+		return {};
+	auto p(myhgc->our_latest_gtid);
+	wrunlock();
+	return p;
+}
+
+std::shared_ptr<Shared_GTID> MySQL_HostGroups_Manager::update_our_latest_gtid(unsigned int hid, const GTID_UUID & uuid, uint64_t trxid) {
+	bool update = true;
+	std::shared_ptr<Shared_GTID> p;
+
+	{
+		wrlock();
+		auto myhgc = MyHGC_lookup(hid);
+		if (!myhgc->our_latest_gtid) {
+			myhgc->our_latest_gtid = std::make_shared<Shared_GTID>(hid, uuid, trxid);
+			update = false;
+		}
+		p = myhgc->our_latest_gtid;
+		wrunlock();
+	}
+
+	if (update)
+		p->update(uuid, trxid);
+	return p;
+}

@@ -199,6 +199,8 @@ class MyHGC {	// MySQL Host Group Container
 	unsigned long long current_time_now;
 	uint32_t new_connections_now;
 	MySrvList *mysrvs;
+	// track the GTID of our own latest query (instead of latest GTID issued by any server for any client) - may be null!
+	std::shared_ptr<Shared_GTID> our_latest_gtid;
 	MyHGC(int);
 	~MyHGC();
 	MySrvC *get_random_MySrvC(const GTID_UUID * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess, unsigned int min_weight);
@@ -699,6 +701,9 @@ class MySQL_HostGroups_Manager {
 	void shutdown();
 	void unshun_server_all_hostgroups(const char * address, uint16_t port, time_t t, int max_wait_sec, unsigned int *skip_hid);
 	MySrvC* find_server_in_hg(unsigned int _hid, const std::string& addr, int port);
+
+	std::shared_ptr<Shared_GTID> update_our_latest_gtid(unsigned int hid, const GTID_UUID & uuid, uint64_t trxid);
+	std::shared_ptr<Shared_GTID> our_latest_gtid(unsigned int hid);
 };
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */

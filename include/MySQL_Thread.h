@@ -191,6 +191,11 @@ class MySQL_Thread
 	conn_exchange_t myexchange;
 #endif // IDLE_THREADS
 
+	struct Shared_GTID_to_hid {
+		static unsigned int getId(const std::shared_ptr<Shared_GTID> & ptr) { return ptr->hid(); }
+	};
+	PtrMap<unsigned int, std::shared_ptr<Shared_GTID>, Shared_GTID_to_hid> shared_gtids_map;
+
 	int pipefd[2];
 	int shutdown;
 	kill_queue_t kq;
@@ -244,6 +249,8 @@ class MySQL_Thread
 	void return_local_connections();
 	void Scan_Sessions_to_Kill(PtrArray *mysess);
 	void Scan_Sessions_to_Kill_All();
+	bool our_latest_gtid(unsigned int hid, GTID_UUID & uuid, uint64_t & trxid);
+	void update_our_latest_gtid(unsigned int hid, const GTID_UUID & uuid, uint64_t trxid);
 };
 
 

@@ -5637,3 +5637,21 @@ void MySQL_Thread::configure_pollout(MySQL_Data_Stream *myds, unsigned int n) {
 		set_backend_to_be_skipped_if_frontend_is_slow(myds, n);
 	}
 }
+
+bool MySQL_Thread::our_latest_gtid(unsigned int hid, GTID_UUID & uuid, uint64_t & trxid) {
+	auto gtid = shared_gtids_map.find(hid);
+	if (!gtid)
+		return false;
+	
+	gtid->get(uuid, trxid);
+	return true;
+}
+
+void MySQL_Thread::update_our_latest_gtid(unsigned int hid, const GTID_UUID & uuid, uint64_t trxid) {
+	auto gtid = shared_gtids_map.find(hid);
+	if (!gtid) {
+		shared_gtids_map.add(MyHGM->update_our_latest_gtid(hid, uuid, trxid));
+		return;
+	}
+	gtid->update(uuid, trxid);
+}
