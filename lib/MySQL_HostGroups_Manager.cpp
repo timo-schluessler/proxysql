@@ -542,7 +542,8 @@ bool GTID_Server_Data::read_next_gtid() {
 					rec_trxid=atoll(rec_msg+3);
 					break;
 				default:
-					break;
+					std::cout << "invalid message from binlog reader: I" << rec_msg[1] << std::endl;
+					return true; // error!
 			}
 			//fprintf(stdout,"%s:%lu\n", uuid_server.print(), rec_trxid);
 			gtid_t new_gtid = std::make_pair(uuid_server, rec_trxid);
