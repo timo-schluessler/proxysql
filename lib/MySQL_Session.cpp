@@ -276,6 +276,7 @@ Query_Info::Query_Info() {
 	bool_is_select_NOT_for_update_computed=false;
 	have_affected_rows=false;
 	waiting_since = 0;
+	waiting_for_gtid = false;
 	affected_rows=0;
 	rows_sent=0;
 	start_time=0;
@@ -308,6 +309,7 @@ void Query_Info::begin(unsigned char *_p, int len, bool mysql_header) {
 	bool_is_select_NOT_for_update_computed=false;
 	have_affected_rows=false;
 	waiting_since = 0;
+	waiting_for_gtid = false;
 	affected_rows=0;
 	rows_sent=0;
 	sess->gtid_hid=-1;
@@ -6844,7 +6846,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				}
 			}
 		}
-		if (min_weight && CurrentQuery.waiting_since && (int)(thread->curtime - CurrentQuery.waiting_since) > mysql_thread___min_weight_timeout * 1000)
+		if (min_weight && (int)(thread->curtime - CurrentQuery.start_time) > mysql_thread___min_weight_timeout * 1000)
 			min_weight = 0;
 
 		if (session_fast_forward == false && qpo->create_new_conn == false) {
@@ -6948,8 +6950,8 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				else
 					pause_until = poll_at;
 
-				if (!CurrentQuery.waiting_since) {
-					CurrentQuery.waiting_since = thread->curtime;
+				if (!CurrentQuery.waiting_for_gtid) {
+					CurrentQuery.waiting_for_gtid = true;
 					//thread->status_variables.stvar[st_var_ConnPool_get_conn_gtid_missing]++;
 				}
 				return;

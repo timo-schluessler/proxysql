@@ -2864,6 +2864,7 @@ MySrvC *MyHGC::get_random_MySrvC(const GTID_UUID * gtid_uuid, uint64_t gtid_trxi
 	MySrvC **mysrvcCandidates = mysrvcCandidates_static;
 	unsigned int num_candidates = 0;
 	bool max_connections_reached = false;
+	bool none_above_min_weight = true;
 	if (l>32) {
 		mysrvcCandidates = (MySrvC **)malloc(sizeof(MySrvC *)*l);
 	}
@@ -2872,6 +2873,7 @@ MySrvC *MyHGC::get_random_MySrvC(const GTID_UUID * gtid_uuid, uint64_t gtid_trxi
 		for (j=0; j<l; j++) {
 			mysrvc=mysrvs->idx(j);
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE && mysrvc->weight >= min_weight) { // consider this server only if ONLINE and weight is above given threshold
+				none_above_min_weight = false;
 				if (mysrvc->ConnectionsUsed->conns_length() < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
 					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
 						if (gtid_trxid) {
@@ -3062,6 +3064,8 @@ MySrvC *MyHGC::get_random_MySrvC(const GTID_UUID * gtid_uuid, uint64_t gtid_trxi
 #ifdef TEST_AURORA
 			array_mysrvc_cands += num_candidates;
 #endif // TEST_AURORA
+			if (none_above_min_weight)
+				return reinterpret_cast<MySrvC*>(1); // a valid pointer will always be aligned, so 1 can't be a valid pointer
 			return NULL; // if we reach here, we couldn't find any target
 		}
 
@@ -3090,7 +3094,7 @@ MySrvC *MyHGC::get_random_MySrvC(const GTID_UUID * gtid_uuid, uint64_t gtid_trxi
 		unsigned int New_sum=sum;
 
 		if (New_sum==0) {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with matching weight\n");
 			if (l>32) {
 				free(mysrvcCandidates);
 			}
@@ -3450,12 +3454,14 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 	status.myconnpoll_get++;
 	MyHGC *myhgc=MyHGC_lookup(_hid);
 	MySrvC *mysrvc = NULL;
+	if (myhgc->mysrvs->cnt() == 1) // ignore min_weight if there is only one server left in this hostgroup
+		min_weight = 0;
 #ifdef TEST_AURORA
 	for (int i=0; i<10; i++)
 #endif // TEST_AURORA
-	if (myhgc->mysrvs->cnt() == 1) // ignore min_weight if there is only one server left in this hostgroup
-		min_weight = 0;
-	mysrvc = myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid, max_lag_ms, sess, min_weight);
+		mysrvc = myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid, max_lag_ms, sess, min_weight);
+	if (reinterpret_cast<uintptr_t>(mysrvc) == 1) // retry with min_weight = 0 if no server matches min_weight
+		mysrvc = myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid, max_lag_ms, sess, 0);
 	if (mysrvc) { // a MySrvC exists. If not, we return NULL = no targets
 		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff);
 		if (conn) {

@@ -61,6 +61,7 @@ class Query_Info {
 	uint64_t affected_rows;
 	uint64_t rows_sent;
 	uint64_t waiting_since;
+	bool waiting_for_gtid;
 
 	Query_Info();
 	~Query_Info();
