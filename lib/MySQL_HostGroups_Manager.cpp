@@ -3065,7 +3065,7 @@ MySrvC *MyHGC::get_random_MySrvC(const GTID_UUID * gtid_uuid, uint64_t gtid_trxi
 #ifdef TEST_AURORA
 			array_mysrvc_cands += num_candidates;
 #endif // TEST_AURORA
-			if (none_above_min_weight)
+			if (none_above_min_weight && min_weight)
 				return reinterpret_cast<MySrvC*>(1); // a valid pointer will always be aligned, so 1 can't be a valid pointer
 			return NULL; // if we reach here, we couldn't find any target
 		}
@@ -3461,7 +3461,7 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 	for (int i=0; i<10; i++)
 #endif // TEST_AURORA
 		mysrvc = myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid, max_lag_ms, sess, min_weight);
-	if (reinterpret_cast<uintptr_t>(mysrvc) == 1) // retry with min_weight = 0 if no server matches min_weight
+	if (reinterpret_cast<uintptr_t>(mysrvc) == 1 && min_weight) // retry with min_weight = 0 if no server matches min_weight
 		mysrvc = myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid, max_lag_ms, sess, 0);
 	if (mysrvc) { // a MySrvC exists. If not, we return NULL = no targets
 		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff);
