@@ -1674,7 +1674,7 @@ __internal_loop:
 		}
 		if (qr->min_weight >= 0) {
 			// Note: negative min_weight means this rule doesn't change the min_weight
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set min weight: %d. A backend with at least weight %d will be used\n", qr->rule_id, qr->min_weight);
+			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set min weight: %d. A backend with at least weight %d will be used\n", qr->rule_id, qr->min_weight, qr->min_weight);
 			ret->min_weight = qr->min_weight;
 		}
 		if (qr->log >= 0) {

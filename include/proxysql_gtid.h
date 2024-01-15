@@ -21,6 +21,9 @@ public:
 	char * print() const; // prints this uuid to a thread local buffer and returns that buffer
 
 	bool operator==(const GTID_UUID & uuid) const { return this->uuid == uuid.uuid; }
+	#if __cplusplus < 202002L
+		bool operator!=(const GTID_UUID & uuid) const { return !(*this == uuid); }
+	#endif
 
 	friend struct std::hash<GTID_UUID>;
 
@@ -166,10 +169,14 @@ class Shared_GTID {
 		unsigned int hid() { return _hid; }
 		void update(const GTID_UUID & uuid, uint64_t trxid) {
 			pthread_rwlock_wrlock(&rwlock);
-			if (this->trxid < trxid) {
+			// this is somewhat buggy with MySQL: trxid's are not globally strictly monotonic increasing, but every node has its own trxid counter.
+			// this means, that after a failover, trxid might jump backwards. with MariaDB this doesn't happen.
+			// to support MySQL we allow trxids going backward, if the uuid changes. BUT this might cause us to store an older GTID when two queries race.
+			if (uuid != this->uuid) {
 				this->uuid = uuid;
 				this->trxid = trxid;
-			}
+			} else if (this->trxid < trxid)
+				this->trxid = trxid;
 			pthread_rwlock_unlock(&rwlock);
 		}
 		void get(GTID_UUID & uuid, uint64_t & trxid) {
