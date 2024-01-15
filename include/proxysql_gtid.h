@@ -58,7 +58,9 @@ inline bool GTID_UUID::from_string_without_dashes(GTID_UUID * uuid, const char *
 }
 
 inline void GTID_UUID::from_mariadb(GTID_UUID * uuid, uint32_t domain, uint32_t server_id) {
-	sprintf(uuid->uuid.data(), "%08" PRIX32 "0000000000000000%08" PRIX32, domain, server_id);
+	char buf[uuid->uuid.size() + 1];
+	sprintf(buf, "%08" PRIX32 "0000000000000000%08" PRIX32, domain, server_id);
+	memcpy(uuid->uuid.data(), buf, uuid->uuid.size());
 }
 
 inline size_t GTID_UUID::write(void * buf_void) const {
