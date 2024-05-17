@@ -4547,18 +4547,20 @@ void MySQL_Session::housekeeping_before_pkts() {
 		for (const int hg_id : hgs_expired_conns) {
 			MySQL_Backend* mybe = find_backend(hg_id);
 
-			if (mybe != nullptr) {
-				MySQL_Data_Stream* myds = mybe->server_myds;
+			if (!mybe)
+				continue;
+			MySQL_Data_Stream* myds = mybe->server_myds;
+			if (!myds || !myds->myconn)
+				continue;
 
-				if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
-					if (mysql_thread___reset_connection_algorithm == 2) {
-						create_new_session_and_reset_connection(myds);
-					} else {
-						myds->destroy_MySQL_Connection_From_Pool(true);
-					}
+			if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
+				if (mysql_thread___reset_connection_algorithm == 2) {
+					create_new_session_and_reset_connection(myds);
 				} else {
-					myds->return_MySQL_Connection_To_Pool();
+					myds->destroy_MySQL_Connection_From_Pool(true);
 				}
+			} else {
+				myds->return_MySQL_Connection_To_Pool();
 			}
 		}
 		// We are required to perform a cleanup after consuming the elements, thus preventing any subsequent
