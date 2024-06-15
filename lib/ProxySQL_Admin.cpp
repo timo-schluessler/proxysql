@@ -4519,6 +4519,13 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		}
 	}
 
+	if (!strncasecmp("select $$", query_no_space, strlen("select $$"))) {
+		error = "This query ('select $$') seems to have to fail to allow some mysql clients (at least MySQL Community version 8.4 LTS) to be able to connect...";
+		SPA->send_MySQL_ERR(&sess->client_myds->myprot, error);
+		run_query=false;
+		goto __run_query;
+	}
+
 	if (!strncasecmp("select concat(@@version, ' ', @@version_comment)", query_no_space, strlen("select concat(@@version, ' ', @@version_comment)"))) {
 		l_free(query_length,query);
 		char *q = const_cast<char*>("SELECT '%s Admin Module'");
